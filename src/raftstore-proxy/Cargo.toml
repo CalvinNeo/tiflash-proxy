@@ -1,0 +1,41 @@
+[package]
+name = "raftstore-proxy"
+version = "0.0.1"
+license = "Apache-2.0"
+edition = "2018"
+publish = false
+
+[lib]
+name = "raftstore_proxy"
+crate-type = ["cdylib"]
+
+[features]
+sse = ["engine_rocks/sse"]
+cloud-aws = [
+    "encryption_export/cloud-aws",
+    "sst_importer/cloud-aws",
+]
+cloud-gcp = [
+    "encryption_export/cloud-gcp",
+    "sst_importer/cloud-gcp",
+]
+cloud-azure = [
+    "encryption_export/cloud-azure",
+    "sst_importer/cloud-azure",
+]
+test-engines-rocksdb = [
+    "engine_test/test-engines-rocksdb",
+]
+
+[dependencies]
+tikv = { path = "../../contrib/tikv" }
+sst_importer = { path = "../../contrib/tikv/components/sst_importer", default-features = false }
+encryption_export = { path = "../../contrib/tikv/components/encryption/export", default-features = false }
+server = { path = "../../contrib/tikv/components/server" }
+engine_rocks = { path = "../../contrib/tikv/components/engine_rocks", default-features = false }
+engine_test = { path = "../../contrib/tikv/components/engine_test", default-features = false }
+tikv_util = { path = "../../contrib/tikv/components/tikv_util", default-features = false }
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+
+

@@ -1,0 +1,3 @@
+[submodule "contrib/tikv"]
+	path = contrib/tikv
+	url = git@github.com:CalvinNeo/tidb-engine-ext.git

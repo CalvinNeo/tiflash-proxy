@@ -1,0 +1,98 @@
+[package]
+name = "tiproxy"
+version = "6.0.0-alpha"
+authors = ["The TiKV Authors"]
+description = "A distributed transactional key-value database powered by Rust and Raft"
+license = "Apache-2.0"
+keywords = ["KV", "distributed-systems", "raft"]
+homepage = "https://tikv.org"
+repository = "https://github.com/tikv/tikv/"
+readme = "README.md"
+edition = "2018"
+publish = false
+
+[lib]
+path = "raftstore-proxy/src/lib.rs"
+name = "tiproxy"
+crate-type = ["cdylib"]
+
+[features]
+default = []
+
+# for testing configure propegate to other crates
+# https://stackoverflow.com/questions/41700543/can-we-share-test-utilites-between-crates
+testing = []
+
+[dependencies]
+
+[target.'cfg(target_arch = "x86_64")'.dependencies]
+pprof = { version = "^0.6", default-features = false, features = ["flamegraph", "protobuf-codec", "protobuf", "cpp"] }
+
+[dev-dependencies]
+
+[patch.crates-io]
+prometheus = { git = "https://github.com/solotzg/rust-prometheus.git", rev = "b4fe98a06a58d29f9b9987a0d7186f6ed5230193" }
+# TODO: remove this when new raft-rs is published.
+raft = { git = "https://github.com/tikv/raft-rs", branch = "master" }
+raft-proto = { git = "https://github.com/tikv/raft-rs", branch = "master" }
+protobuf = { git = "https://github.com/pingcap/rust-protobuf", branch = "v2.8" }
+protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", branch = "v2.8" }
+pprof = { git = "https://github.com/tikv/pprof-rs.git" }
+
+# TODO: remove this replacement after rusoto_s3 truly supports virtual-host style (https://github.com/rusoto/rusoto/pull/1823).
+rusoto_core = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
+rusoto_credential = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
+rusoto_kms = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
+rusoto_mock = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
+rusoto_s3 = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
+rusoto_sts = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
+
+[workspace]
+members = [
+  "raftstore-proxy",
+  "gen-proxy-ffi",
+]
+default-members = ["raftstore-proxy"]
+
+[profile.dev]
+opt-level = 0
+debug = true
+codegen-units = 4
+lto = false
+incremental = true
+panic = 'unwind'
+debug-assertions = true
+overflow-checks = false
+rpath = false
+
+[profile.release]
+opt-level = 3
+debug = false
+codegen-units = 1
+lto = "thin"
+incremental = false
+panic = 'unwind'
+debug-assertions = false
+overflow-checks = false
+rpath = false
+
+[profile.test]
+opt-level = 0
+debug = true
+codegen-units = 16
+lto = false
+incremental = true
+debug-assertions = true
+overflow-checks = true
+rpath = false
+
+# The benchmark profile is identical to release, except that lto = false
+[profile.bench]
+opt-level = 3
+debug = false
+codegen-units = 1
+lto = 'thin'
+incremental = false
+debug-assertions = false
+overflow-checks = false
+rpath = false
