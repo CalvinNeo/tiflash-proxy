@@ -28,14 +28,26 @@ test-engines-rocksdb = [
 ]
 
 [dependencies]
+clap = "2.32"
+futures = "0.3"
+raft_log_engine = { path = "../../contrib/tikv/components/raft_log_engine", default-features = false }
+api_version = { path = "../../contrib/tikv/components/api_version", default-features = false }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+futures-util = { version = "0.3", default-features = false, features = ["io"] }
+protobuf = { version = "2.8", features = ["bytes"] }
+keys = { path = "../../contrib/tikv/components/keys", default-features = false }
+encryption = { path = "../../contrib/tikv/components/encryption", default-features = false }
+toml = "0.5"
 tikv = { path = "../../contrib/tikv" }
+raftstore = { path = "../../contrib/tikv/components/raftstore", default-features = false }
 sst_importer = { path = "../../contrib/tikv/components/sst_importer", default-features = false }
 encryption_export = { path = "../../contrib/tikv/components/encryption/export", default-features = false }
 server = { path = "../../contrib/tikv/components/server" }
+engine_traits = { path = "../../contrib/tikv/components/engine_traits", default-features = false }
 engine_rocks = { path = "../../contrib/tikv/components/engine_rocks", default-features = false }
 engine_test = { path = "../../contrib/tikv/components/engine_test", default-features = false }
 tikv_util = { path = "../../contrib/tikv/components/tikv_util", default-features = false }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
-
+file_system = { path = "../../contrib/tikv/components/file_system", default-features = false }
 

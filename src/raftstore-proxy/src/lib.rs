@@ -1,6 +1,11 @@
+use crate::proxy::proxy_version_info;
 use std::os::raw::{c_char, c_int};
 use tikv_util::*;
-use server::proxy::proxy_version_info;
+
+mod engine_store_ffi;
+mod lock_cf_reader;
+mod proxy;
+mod run;
 
 fn log_proxy_info() {
     info!("Welcome To RaftStore Proxy");
@@ -28,5 +33,5 @@ pub unsafe extern "C" fn run_raftstore_proxy_ffi(
     argv: *const *const c_char,
     helper: *const u8,
 ) {
-    server::proxy::run_proxy(argc, argv, helper);
+    proxy::run_proxy(argc, argv, helper);
 }
