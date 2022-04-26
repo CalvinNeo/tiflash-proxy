@@ -46,6 +46,7 @@ server = { path = "../../contrib/tikv/components/server" }
 engine_traits = { path = "../../contrib/tikv/components/engine_traits", default-features = false }
 engine_rocks = { path = "../../contrib/tikv/components/engine_rocks", default-features = false }
 engine_test = { path = "../../contrib/tikv/components/engine_test", default-features = false }
+engine_tiflash = { path = "../engine_tiflash", default-features = false }
 tikv_util = { path = "../../contrib/tikv/components/tikv_util", default-features = false }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }

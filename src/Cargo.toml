@@ -31,7 +31,7 @@ pprof = { version = "^0.6", default-features = false, features = ["flamegraph", 
 [dev-dependencies]
 
 [patch.crates-io]
-prometheus = { git = "https://github.com/solotzg/rust-prometheus.git", rev = "b4fe98a06a58d29f9b9987a0d7186f6ed5230193" }
+prometheus = { git = "https://github.com/solotzg/rust-prometheus.git", rev = "f64d539333e4d1908e1655570432de39ffc82933" }
 # TODO: remove this when new raft-rs is published.
 raft = { git = "https://github.com/tikv/raft-rs", branch = "master" }
 raft-proto = { git = "https://github.com/tikv/raft-rs", branch = "master" }

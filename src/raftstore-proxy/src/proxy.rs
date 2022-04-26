@@ -272,8 +272,7 @@ pub unsafe fn run_proxy(
         process::exit(0)
     }
 
-    config.raft_store.engine_store_server_helper = engine_store_server_helper as *const _ as isize;
-    crate::run::run_tikv(config);
+    crate::run::run_tikv(config, engine_store_server_helper as *const _ as isize);
 }
 
 fn check_engine_label(matches: &clap::ArgMatches<'_>) {
