@@ -26,6 +26,7 @@ nortcheck = []
 api_version = { path = "../../contrib/tikv/components/api_version", default-features = false }
 encryption = { path = "../../contrib/tikv/components/encryption", default-features = false }
 engine_traits = { path = "../../contrib/tikv/components/engine_traits", default-features = false }
+engine_rocks = { path = "../../contrib/tikv/components/engine_rocks", default-features = false }
 file_system = { path = "../../contrib/tikv/components/file_system", default-features = false }
 keys = { path = "../../contrib/tikv/components/keys", default-features = false }
 num_cpus = "1"

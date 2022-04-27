@@ -15,16 +15,7 @@ use rocksdb::load_latest_options;
 use rocksdb::{CColumnFamilyDescriptor, ColumnFamilyOptions, DBOptions, Env, DB};
 use tikv_util::warn;
 
-pub struct CFOptions<'a> {
-    cf: &'a str,
-    options: ColumnFamilyOptions,
-}
-
-impl<'a> CFOptions<'a> {
-    pub fn new(cf: &'a str, options: ColumnFamilyOptions) -> CFOptions<'a> {
-        CFOptions { cf, options }
-    }
-}
+pub use engine_rocks::raw_util::CFOptions;
 
 pub fn new_engine(
     path: &str,
@@ -257,7 +248,7 @@ mod tests {
         assert_eq!(vec!["1", "2"], cfs_diff(&a, &c));
         assert_eq!(vec!["4", "5", "6"], cfs_diff(&c, &a));
         let d = vec!["1", "2", "3", "4"];
-        let a_diff_d = cfs_diff(&a, &d);
+        let a_diff_d = cfs_diff(new_engine_opt&a, &d);
         assert!(a_diff_d.is_empty());
         assert_eq!(vec!["4"], cfs_diff(&d, &a));
     }

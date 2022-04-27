@@ -11,15 +11,21 @@ use engine_traits::{
     ColumnFamilyOptions, Engines,
     RaftEngine
 };
-use std::sync::Arc;
-use server::server::EnginesResourceInfo;
+use std::sync::{Arc, Mutex};
 use file_system::get_io_rate_limiter;
-use tikv::config::DBConfigManger;
 use std::path::Path;
-use server::setup::fatal;
+use raftstore::store::LocalReader;
+use tikv::server::RaftKv;
+use server::fatal;
+use tikv_util::crit;
+use crate::rawserver;
+use rawserver::ConfiguredRaftEngine;
+use rawserver::EnginesResourceInfo;
+use raftstore::store::fsm::StoreMeta;
+use raftstore::store::fsm::store::PENDING_MSG_CAP;
 
-pub fn init_tiflash_engines<CER: server::server::ConfiguredRaftEngine>(
-    tikv: &mut server::server::TiKVServer<CER>,
+pub fn init_tiflash_engines<CER: ConfiguredRaftEngine>(
+    tikv: &mut rawserver::TiKVServer<CER>,
     flow_listener: engine_rocks::FlowListener,
     engine_store_server_helper: isize,
 ) -> (Engines<engine_tiflash::RocksEngine, CER>, Arc<EnginesResourceInfo>) {
@@ -39,7 +45,7 @@ pub fn init_tiflash_engines<CER: server::server::ConfiguredRaftEngine>(
     let kv_cfs_opts = tikv.config.rocksdb.build_cf_opts(
         &block_cache,
         Some(&tikv.region_info_accessor),
-        tikv.config.storage.enable_ttl,
+        tikv.config.storage.api_version(),
     );
     let db_path = tikv.store_path.join(Path::new(tikv::config::DEFAULT_ROCKSDB_SUB_DIR));
     let kv_engine = engine_tiflash::raw_util::new_engine_opt(
@@ -55,7 +61,7 @@ pub fn init_tiflash_engines<CER: server::server::ConfiguredRaftEngine>(
     let cfg_controller = tikv.cfg_controller.as_mut().unwrap();
     cfg_controller.register(
         tikv::config::Module::Rocksdb,
-        Box::new(DBConfigManger::new(
+        Box::new(crate::config_mgr::DBConfigManger::new(
             engines.kv.clone(),
             tikv::config::DBType::Kv,
             tikv.config.storage.block_cache.shared,
@@ -73,8 +79,8 @@ pub fn init_tiflash_engines<CER: server::server::ConfiguredRaftEngine>(
 }
 
 #[inline]
-fn run_impl<CER: server::server::ConfiguredRaftEngine, Api: APIVersion>(config: TiKvConfig, engine_store_server_helper: isize) {
-    let mut tikv = server::server::TiKVServer::<CER>::init(config);
+fn run_impl<CER: ConfiguredRaftEngine, Api: APIVersion>(config: TiKvConfig, engine_store_server_helper: isize) {
+    let mut tikv = rawserver::TiKVServer::<CER>::init(config);
 
     // Must be called after `TiKVServer::init`.
     let memory_limit = tikv.config.memory_usage_limit.unwrap().0;
@@ -87,6 +93,7 @@ fn run_impl<CER: server::server::ConfiguredRaftEngine, Api: APIVersion>(config: 
     tikv.init_encryption();
     let fetcher = tikv.init_io_utility();
     let listener = tikv.init_flow_receiver();
+    // We use engine_tiflash
     let (engines, engines_info) = init_tiflash_engines(&mut tikv, listener, engine_store_server_helper);
     tikv.init_engines(engines.clone());
     let server_config = tikv.init_servers::<Api>();
@@ -117,7 +124,7 @@ pub fn run_tikv(config: TiKvConfig, engine_store_server_helper: isize) {
     CPU_CORES_QUOTA_GAUGE.set(SysQuota::cpu_cores_quota());
 
     // Do some prepare works before start.
-    server::server::pre_start();
+    rawserver::pre_start();
 
     let _m = Monitor::default();
 
