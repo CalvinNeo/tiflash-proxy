@@ -16,13 +16,17 @@ use file_system::get_io_rate_limiter;
 use std::path::Path;
 use raftstore::store::LocalReader;
 use tikv::server::RaftKv;
-use server::fatal;
-use tikv_util::crit;
 use crate::rawserver;
 use rawserver::ConfiguredRaftEngine;
 use rawserver::EnginesResourceInfo;
 use raftstore::store::fsm::StoreMeta;
 use raftstore::store::fsm::store::PENDING_MSG_CAP;
+
+use server::fatal;
+use tikv_util::{crit, info, warn, error, error_unknown, thd_name};
+use crate::engine_store_ffi::*;
+use std::time::Duration;
+use std::sync::atomic::AtomicU8;
 
 pub fn init_tiflash_engines<CER: ConfiguredRaftEngine>(
     tikv: &mut rawserver::TiKVServer<CER>,
@@ -91,11 +95,52 @@ fn run_impl<CER: ConfiguredRaftEngine, Api: APIVersion>(config: TiKvConfig, engi
     tikv.init_fs();
     tikv.init_yatp();
     tikv.init_encryption();
+
+    let mut proxy = RaftStoreProxy::new(
+        AtomicU8::new(RaftProxyStatus::Idle as u8),
+        tikv.encryption_key_manager.clone(),
+        Box::new(ReadIndexClient::new(
+            tikv.router.clone(),
+            SysQuota::cpu_cores_quota() as usize * 2,
+        )),
+        std::sync::RwLock::new(None),
+    );
+
+    let proxy_helper = RaftStoreProxyFFIHelper::new(&proxy);
+
+    info!("set raft-store proxy helper");
+
+    get_engine_store_server_helper().handle_set_proxy(&proxy_helper);
+
+    info!("wait for engine-store server to start");
+    while get_engine_store_server_helper().handle_get_engine_store_server_status()
+        == EngineStoreServerStatus::Idle
+    {
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    if get_engine_store_server_helper().handle_get_engine_store_server_status()
+        != EngineStoreServerStatus::Running
+    {
+        info!("engine-store server is not running, make proxy exit");
+        return;
+    }
+
+    info!("engine-store server is started");
+
     let fetcher = tikv.init_io_utility();
     let listener = tikv.init_flow_receiver();
     // We use engine_tiflash
     let (engines, engines_info) = init_tiflash_engines(&mut tikv, listener, engine_store_server_helper);
     tikv.init_engines(engines.clone());
+
+    {
+        // Should be engine_rocks::RocksEngine
+        proxy.set_kv_engine(Some(engines.kv.clone()));
+    }
+
+    proxy.set_status(RaftProxyStatus::Running);
+
     let server_config = tikv.init_servers::<Api>();
     tikv.register_services();
     tikv.init_metrics_flusher(fetcher, engines_info);
@@ -103,8 +148,43 @@ fn run_impl<CER: ConfiguredRaftEngine, Api: APIVersion>(config: TiKvConfig, engi
     tikv.run_server(server_config);
     tikv.run_status_server();
 
+    proxy.set_status(RaftProxyStatus::Running);
+
+    {
+        debug_assert!(
+            get_engine_store_server_helper().handle_get_engine_store_server_status()
+                == EngineStoreServerStatus::Running
+        );
+        let _ = tikv.engines.take().unwrap().engines;
+        loop {
+            if get_engine_store_server_helper().handle_get_engine_store_server_status()
+                != EngineStoreServerStatus::Running
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    }
+
+    info!("found engine-store server status is {:?}, start to stop all services",
+            get_engine_store_server_helper().handle_get_engine_store_server_status()
+        );
+
+
     server::signal_handler::wait_for_signal(Some(tikv.engines.take().unwrap().engines));
     tikv.stop();
+
+    proxy.set_status(RaftProxyStatus::Stopped);
+
+    info!("all services in raft-store proxy are stopped");
+
+    info!("wait for engine-store server to stop");
+    while get_engine_store_server_helper().handle_get_engine_store_server_status()
+        != EngineStoreServerStatus::Terminated
+    {
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    info!("engine-store server is stopped");
 }
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which

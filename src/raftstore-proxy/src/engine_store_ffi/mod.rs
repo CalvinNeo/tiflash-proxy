@@ -7,6 +7,7 @@ mod utils;
 use encryption::DataKeyManager;
 use engine_rocks::encryption::get_env;
 use engine_rocks::{RocksSstIterator, RocksSstReader};
+use engine_tiflash::RocksEngine;
 use engine_traits::{
     EncryptionKeyManager, EncryptionMethod, FileEncryptionInfo, Iterator, Peekable, SeekKey,
     SstReader, CF_DEFAULT, CF_LOCK, CF_WRITE,
@@ -57,7 +58,7 @@ pub struct RaftStoreProxy {
     status: AtomicU8,
     key_manager: Option<Arc<DataKeyManager>>,
     read_index_client: Box<dyn read_index_helper::ReadIndex>,
-    kv_engine: std::sync::RwLock<Option<engine_rocks::RocksEngine>>,
+    kv_engine: std::sync::RwLock<Option<RocksEngine>>,
 }
 
 pub trait RaftStoreProxyFFI: Sync {
@@ -65,7 +66,7 @@ pub trait RaftStoreProxyFFI: Sync {
     fn get_value_cf<F>(&self, cf: &str, key: &[u8], cb: F)
     where
         F: FnOnce(Result<Option<&[u8]>, String>);
-    fn set_kv_engine(&mut self, kv_engine: Option<engine_rocks::RocksEngine>);
+    fn set_kv_engine(&mut self, kv_engine: Option<RocksEngine>);
 }
 
 impl RaftStoreProxy {
@@ -73,7 +74,7 @@ impl RaftStoreProxy {
         status: AtomicU8,
         key_manager: Option<Arc<DataKeyManager>>,
         read_index_client: Box<dyn read_index_helper::ReadIndex>,
-        kv_engine: std::sync::RwLock<Option<engine_rocks::RocksEngine>>,
+        kv_engine: std::sync::RwLock<Option<RocksEngine>>,
     ) -> Self {
         RaftStoreProxy {
             status,
@@ -85,7 +86,7 @@ impl RaftStoreProxy {
 }
 
 impl RaftStoreProxyFFI for RaftStoreProxy {
-    fn set_kv_engine(&mut self, kv_engine: Option<engine_rocks::RocksEngine>) {
+    fn set_kv_engine(&mut self, kv_engine: Option<RocksEngine>) {
         let mut lock = self.kv_engine.write().unwrap();
         *lock = kv_engine;
     }
@@ -777,7 +778,7 @@ impl Drop for RawCppPtr {
 
 static mut ENGINE_STORE_SERVER_HELPER_PTR: isize = 0;
 
-fn get_engine_store_server_helper() -> &'static EngineStoreServerHelper {
+pub fn get_engine_store_server_helper() -> &'static EngineStoreServerHelper {
     gen_engine_store_server_helper(unsafe { ENGINE_STORE_SERVER_HELPER_PTR })
 }
 

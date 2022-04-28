@@ -1,4 +1,4 @@
-use engine_rocks::RocksEngine;
+use engine_tiflash::RocksEngine;
 use engine_traits::RaftEngine;
 use futures::executor::block_on;
 use futures_util::compat::Future01CompatExt;

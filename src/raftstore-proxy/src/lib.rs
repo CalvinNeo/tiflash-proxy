@@ -37,5 +37,6 @@ pub unsafe extern "C" fn run_raftstore_proxy_ffi(
     argv: *const *const c_char,
     helper: *const u8,
 ) {
+    log_proxy_info();
     proxy::run_proxy(argc, argv, helper);
 }
