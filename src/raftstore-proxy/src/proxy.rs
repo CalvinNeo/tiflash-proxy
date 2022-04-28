@@ -263,6 +263,23 @@ pub unsafe fn run_proxy(
 
     check_engine_label(&matches);
     server::setup::overwrite_config_with_cmd_args(&mut config, &matches);
+
+    // There are more for overwrite_config_with_cmd_args to handle
+    if let Some(engine_store_version) = matches.value_of("engine-version") {
+        config.server.engine_store_version = engine_store_version.to_owned();
+    }
+    if let Some(engine_store_git_hash) = matches.value_of("engine-git-hash") {
+        config.server.engine_store_git_hash = engine_store_git_hash.to_owned();
+    }
+    if config.server.engine_addr.is_empty() {
+        if let Some(engine_addr) = matches.value_of("engine-addr") {
+            config.server.engine_addr = engine_addr.to_owned();
+        }
+    }
+    if let Some(engine_addr) = matches.value_of("advertise-engine-addr") {
+        config.server.engine_addr = engine_addr.to_owned();
+    }
+
     config.logger_compatible_adjust();
 
     if is_config_check {
