@@ -58,6 +58,7 @@ pub fn init_tiflash_engines<CER: ConfiguredRaftEngine>(
         kv_cfs_opts,
     ).unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
 
+    // engine_tiflash::RocksEngine has engine_rocks::RocksEngine inside
     let mut kv_engine = engine_tiflash::RocksEngine::from_db(Arc::new(kv_engine));
     kv_engine.engine_store_server_helper = engine_store_server_helper;
     let engines = Engines::new(kv_engine, raft_engine);
@@ -65,8 +66,8 @@ pub fn init_tiflash_engines<CER: ConfiguredRaftEngine>(
     let cfg_controller = tikv.cfg_controller.as_mut().unwrap();
     cfg_controller.register(
         tikv::config::Module::Rocksdb,
-        Box::new(crate::config_mgr::DBConfigManger::new(
-            engines.kv.clone(),
+        Box::new(tikv::config::DBConfigManger::new(
+            engines.kv.rocks.clone(),
             tikv::config::DBType::Kv,
             tikv.config.storage.block_cache.shared,
         )),

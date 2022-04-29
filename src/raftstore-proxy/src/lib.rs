@@ -9,7 +9,6 @@ mod lock_cf_reader;
 mod proxy;
 mod run;
 mod rawserver;
-mod config_mgr;
 
 fn log_proxy_info() {
     info!("Welcome To RaftStore Proxy");

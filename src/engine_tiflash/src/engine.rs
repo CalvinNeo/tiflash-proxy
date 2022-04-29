@@ -10,31 +10,33 @@ use engine_traits::{
 };
 use rocksdb::{DBIterator, Writable, DB};
 
-use crate::db_vector::RocksDBVector;
-use crate::options::RocksReadOptions;
-use crate::rocks_metrics::{
+use engine_rocks::db_vector::RocksDBVector;
+use engine_rocks::options::RocksReadOptions;
+use engine_rocks::rocks_metrics::{
     flush_engine_histogram_metrics, flush_engine_iostall_properties, flush_engine_properties,
     flush_engine_ticker_metrics,
 };
-use crate::rocks_metrics_defs::{
+use engine_rocks::rocks_metrics_defs::{
     ENGINE_HIST_TYPES, ENGINE_TICKER_TYPES, TITAN_ENGINE_HIST_TYPES, TITAN_ENGINE_TICKER_TYPES,
 };
-use crate::util::get_cf_handle;
-use crate::{RocksEngineIterator, RocksSnapshot};
+use engine_rocks::util::get_cf_handle;
+use engine_rocks::{RocksEngineIterator, RocksSnapshot};
 
 #[derive(Clone, Debug)]
 pub struct RocksEngine {
-    db: Arc<DB>,
-    shared_block_cache: bool,
-    pub engine_store_server_helper: isize
+    // Must ensure rocks is the first field, for RocksEngine::from_ref
+    pub rocks: engine_rocks::RocksEngine,
+    pub engine_store_server_helper: isize,
 }
 
 impl RocksEngine {
     pub fn from_db(db: Arc<DB>) -> Self {
         RocksEngine {
-            db,
-            shared_block_cache: false,
-            engine_store_server_helper: 0
+            rocks: engine_rocks::RocksEngine {
+                db,
+                shared_block_cache: false,
+            },
+            engine_store_server_helper: 0,
         }
     }
 
@@ -43,11 +45,11 @@ impl RocksEngine {
     }
 
     pub fn as_inner(&self) -> &Arc<DB> {
-        &self.db
+        &self.rocks.db
     }
 
     pub fn get_sync_db(&self) -> Arc<DB> {
-        self.db.clone()
+        self.rocks.db.clone()
     }
 
     pub fn exists(path: &str) -> bool {
@@ -63,7 +65,7 @@ impl RocksEngine {
     }
 
     pub fn set_shared_block_cache(&mut self, enable: bool) {
-        self.shared_block_cache = enable;
+        self.rocks.shared_block_cache = enable;
     }
 }
 
@@ -71,44 +73,44 @@ impl KvEngine for RocksEngine {
     type Snapshot = RocksSnapshot;
 
     fn snapshot(&self) -> RocksSnapshot {
-        RocksSnapshot::new(self.db.clone())
+        RocksSnapshot::new(self.rocks.db.clone())
     }
 
     fn sync(&self) -> Result<()> {
-        self.db.sync_wal().map_err(Error::Engine)
+        self.rocks.db.sync_wal().map_err(Error::Engine)
     }
 
     fn flush_metrics(&self, instance: &str) {
         for t in ENGINE_TICKER_TYPES {
-            let v = self.db.get_and_reset_statistics_ticker_count(*t);
+            let v = self.rocks.db.get_and_reset_statistics_ticker_count(*t);
             flush_engine_ticker_metrics(*t, v, instance);
         }
         for t in ENGINE_HIST_TYPES {
-            if let Some(v) = self.db.get_statistics_histogram(*t) {
+            if let Some(v) = self.rocks.db.get_statistics_histogram(*t) {
                 flush_engine_histogram_metrics(*t, v, instance);
             }
         }
-        if self.db.is_titan() {
+        if self.rocks.db.is_titan() {
             for t in TITAN_ENGINE_TICKER_TYPES {
-                let v = self.db.get_and_reset_statistics_ticker_count(*t);
+                let v = self.rocks.db.get_and_reset_statistics_ticker_count(*t);
                 flush_engine_ticker_metrics(*t, v, instance);
             }
             for t in TITAN_ENGINE_HIST_TYPES {
-                if let Some(v) = self.db.get_statistics_histogram(*t) {
+                if let Some(v) = self.rocks.db.get_statistics_histogram(*t) {
                     flush_engine_histogram_metrics(*t, v, instance);
                 }
             }
         }
-        flush_engine_properties(&self.db, instance, self.shared_block_cache);
-        flush_engine_iostall_properties(&self.db, instance);
+        flush_engine_properties(&self.rocks.db, instance, self.rocks.shared_block_cache);
+        flush_engine_iostall_properties(&self.rocks.db, instance);
     }
 
     fn reset_statistics(&self) {
-        self.db.reset_statistics();
+        self.rocks.db.reset_statistics();
     }
 
     fn bad_downcast<T: 'static>(&self) -> &T {
-        let e: &dyn Any = &self.db;
+        let e: &dyn Any = &self.rocks.db;
         e.downcast_ref().expect("bad engine downcast")
     }
 }
@@ -119,16 +121,16 @@ impl Iterable for RocksEngine {
     fn iterator_opt(&self, opts: IterOptions) -> Result<Self::Iterator> {
         let opt: RocksReadOptions = opts.into();
         Ok(RocksEngineIterator::from_raw(DBIterator::new(
-            self.db.clone(),
+            self.rocks.db.clone(),
             opt.into_raw(),
         )))
     }
 
     fn iterator_cf_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
-        let handle = get_cf_handle(&self.db, cf)?;
+        let handle = get_cf_handle(&self.rocks.db, cf)?;
         let opt: RocksReadOptions = opts.into();
         Ok(RocksEngineIterator::from_raw(DBIterator::new_cf(
-            self.db.clone(),
+            self.rocks.db.clone(),
             handle,
             opt.into_raw(),
         )))
@@ -140,7 +142,7 @@ impl Peekable for RocksEngine {
 
     fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<RocksDBVector>> {
         let opt: RocksReadOptions = opts.into();
-        let v = self.db.get_opt(key, &opt.into_raw())?;
+        let v = self.rocks.db.get_opt(key, &opt.into_raw())?;
         Ok(v.map(RocksDBVector::from_raw))
     }
 
@@ -151,40 +153,40 @@ impl Peekable for RocksEngine {
         key: &[u8],
     ) -> Result<Option<RocksDBVector>> {
         let opt: RocksReadOptions = opts.into();
-        let handle = get_cf_handle(&self.db, cf)?;
-        let v = self.db.get_cf_opt(handle, key, &opt.into_raw())?;
+        let handle = get_cf_handle(&self.rocks.db, cf)?;
+        let v = self.rocks.db.get_cf_opt(handle, key, &opt.into_raw())?;
         Ok(v.map(RocksDBVector::from_raw))
     }
 }
 
 impl SyncMutable for RocksEngine {
     fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
-        self.db.put(key, value).map_err(Error::Engine)
+        self.rocks.db.put(key, value).map_err(Error::Engine)
     }
 
     fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
-        let handle = get_cf_handle(&self.db, cf)?;
-        self.db.put_cf(handle, key, value).map_err(Error::Engine)
+        let handle = get_cf_handle(&self.rocks.db, cf)?;
+        self.rocks.db.put_cf(handle, key, value).map_err(Error::Engine)
     }
 
     fn delete(&self, key: &[u8]) -> Result<()> {
-        self.db.delete(key).map_err(Error::Engine)
+        self.rocks.db.delete(key).map_err(Error::Engine)
     }
 
     fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<()> {
-        let handle = get_cf_handle(&self.db, cf)?;
-        self.db.delete_cf(handle, key).map_err(Error::Engine)
+        let handle = get_cf_handle(&self.rocks.db, cf)?;
+        self.rocks.db.delete_cf(handle, key).map_err(Error::Engine)
     }
 
     fn delete_range(&self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
-        self.db
+        self.rocks.db
             .delete_range(begin_key, end_key)
             .map_err(Error::Engine)
     }
 
     fn delete_range_cf(&self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
-        let handle = get_cf_handle(&self.db, cf)?;
-        self.db
+        let handle = get_cf_handle(&self.rocks.db, cf)?;
+        self.rocks.db
             .delete_range_cf(handle, begin_key, end_key)
             .map_err(Error::Engine)
     }

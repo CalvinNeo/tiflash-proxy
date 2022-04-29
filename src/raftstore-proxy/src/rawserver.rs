@@ -438,6 +438,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         engine_rocks::FlowListener::new(tx)
     }
 
+    // RocksEngine is engine_tiflash
     pub fn init_engines(&mut self, engines: Engines<RocksEngine, ER>) {
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
         let engine = RaftKv::new(

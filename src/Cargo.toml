@@ -51,6 +51,7 @@ rusoto_sts = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-
 members = [
   "raftstore-proxy",
   "gen-proxy-ffi",
+  "engine_tiflash",
 ]
 default-members = ["raftstore-proxy"]
 
