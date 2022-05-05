@@ -1,0 +1,29 @@
+[package]
+name = "mock-engine-store"
+version = "0.0.1"
+license = "Apache-2.0"
+edition = "2018"
+publish = false
+
+[lib]
+name = "mock_engine_store"
+
+[features]
+default = ["protobuf-codec"]
+protobuf-codec = [
+  "protobuf/bytes",
+  "kvproto/protobuf-codec",
+]
+
+[dependencies]
+test_raftstore = { path = "../../contrib/tikv/components/server" }
+server = { path = "../../contrib/tikv/components/server" }
+raftstore = { path = "../../contrib/tikv/components/raftstore", default-features = false }
+protobuf = "2.8.0"
+kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+tikv_util = { path = "../../contrib/tikv/components/tikv_util", default-features = false }
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+engine_traits = { path = "../../contrib/tikv/components/engine_traits", default-features = false }
+engine_rocks = { path = "../../contrib/tikv/components/engine_rocks", default-features = false }
+keys = { path = "../../contrib/tikv/components/keys", default-features = false }

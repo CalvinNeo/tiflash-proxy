@@ -1,0 +1,79 @@
+[package]
+name = "aaa"
+version = "0.0.1"
+edition = "2018"
+publish = false
+
+[lib]
+name = "aaa"
+path = "lib.rs"
+#required-features = ["failpoints"]
+crate-type = ["cdylib"]
+
+[features]
+sse = ["engine_rocks/sse"]
+cloud-aws = [
+    "encryption_export/cloud-aws",
+    "sst_importer/cloud-aws",
+]
+cloud-gcp = [
+    "encryption_export/cloud-gcp",
+    "sst_importer/cloud-gcp",
+]
+cloud-azure = [
+    "encryption_export/cloud-azure",
+    "sst_importer/cloud-azure",
+]
+test-engines-rocksdb = [
+    "engine_test/test-engines-rocksdb",
+]
+
+[dependencies]
+tiproxy = { path = "..", default-features = false }
+clap = "2.32"
+futures = "0.3"
+raft_log_engine = { path = "../../contrib/tikv/components/raft_log_engine", default-features = false }
+api_version = { path = "../../contrib/tikv/components/api_version", default-features = false }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+futures-util = { version = "0.3", default-features = false, features = ["io"] }
+protobuf = { version = "2.8", features = ["bytes"] }
+keys = { path = "../../contrib/tikv/components/keys", default-features = false }
+encryption = { path = "../../contrib/tikv/components/encryption", default-features = false }
+toml = "0.5"
+tikv = { path = "../../contrib/tikv" }
+raftstore = { path = "../../contrib/tikv/components/raftstore", default-features = false }
+sst_importer = { path = "../../contrib/tikv/components/sst_importer", default-features = false }
+encryption_export = { path = "../../contrib/tikv/components/encryption/export", default-features = false }
+server = { path = "../../contrib/tikv/components/server" }
+engine_traits = { path = "../../contrib/tikv/components/engine_traits", default-features = false }
+engine_rocks = { path = "../../contrib/tikv/components/engine_rocks", default-features = false }
+engine_test = { path = "../../contrib/tikv/components/engine_test", default-features = false }
+engine_tiflash = { path = "../engine_tiflash", default-features = false }
+tikv_util = { path = "../../contrib/tikv/components/tikv_util", default-features = false }
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+file_system = { path = "../../contrib/tikv/components/file_system", default-features = false }
+
+cdc = { path = "../../contrib/tikv/components/cdc", default-features = false }
+grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored"] }
+pd_client = { path = "../../contrib/tikv/components/pd_client", default-features = false }
+error_code = { path = "../../contrib/tikv/components/error_code", default-features = false }
+concurrency_manager = { path = "../../contrib/tikv/components/concurrency_manager", default-features = false }
+security = { path = "../../contrib/tikv/components/security", default-features = false }
+tokio = { version = "1.5", features = ["rt-multi-thread"] }
+serde_json = "1.0"
+yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
+resource_metering = { path = "../../contrib/tikv/components/resource_metering" }
+fs2 = "0.4"
+prometheus = { version = "0.13", features = ["nightly"] }
+tikv_alloc = { path = "../../contrib/tikv/components/tikv_alloc" }
+resolved_ts = { path = "../../contrib/tikv/components/resolved_ts", default-features = false }
+causal_ts = { path = "../../contrib/tikv/components/causal_ts" }
+libc = "0.2"
+backup = { path = "../../contrib/tikv/components/backup", default-features = false }
+
+serde_derive = "1.0"
+serde_ignored = "0.1"
+tempfile = "3.0"
+lazy_static = "1.3"
+online_config = { path = "../../contrib/tikv/components/online_config" }

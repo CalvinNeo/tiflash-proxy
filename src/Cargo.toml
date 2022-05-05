@@ -16,6 +16,7 @@ path = "raftstore-proxy/src/lib.rs"
 name = "tiproxy"
 crate-type = ["cdylib"]
 
+
 [features]
 default = []
 
@@ -38,6 +39,7 @@ raft-proto = { git = "https://github.com/tikv/raft-rs", branch = "master" }
 protobuf = { git = "https://github.com/pingcap/rust-protobuf", branch = "v2.8" }
 protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", branch = "v2.8" }
 pprof = { git = "https://github.com/tikv/pprof-rs.git" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 
 # TODO: remove this replacement after rusoto_s3 truly supports virtual-host style (https://github.com/rusoto/rusoto/pull/1823).
 rusoto_core = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
@@ -52,6 +54,7 @@ members = [
   "raftstore-proxy",
   "gen-proxy-ffi",
   "engine_tiflash",
+  "aaa",
 ]
 default-members = ["raftstore-proxy"]
 
