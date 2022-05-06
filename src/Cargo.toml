@@ -1,36 +1,3 @@
-[package]
-name = "tiproxy"
-version = "6.0.0-alpha"
-authors = ["The TiKV Authors"]
-description = "A distributed transactional key-value database powered by Rust and Raft"
-license = "Apache-2.0"
-keywords = ["KV", "distributed-systems", "raft"]
-homepage = "https://tikv.org"
-repository = "https://github.com/tikv/tikv/"
-readme = "README.md"
-edition = "2018"
-publish = false
-
-[lib]
-path = "raftstore-proxy/src/lib.rs"
-name = "tiproxy"
-crate-type = ["cdylib"]
-
-
-[features]
-default = []
-
-# for testing configure propegate to other crates
-# https://stackoverflow.com/questions/41700543/can-we-share-test-utilites-between-crates
-testing = []
-
-[dependencies]
-
-[target.'cfg(target_arch = "x86_64")'.dependencies]
-pprof = { version = "^0.6", default-features = false, features = ["flamegraph", "protobuf-codec", "protobuf", "cpp"] }
-
-[dev-dependencies]
-
 [patch.crates-io]
 prometheus = { git = "https://github.com/solotzg/rust-prometheus.git", rev = "f64d539333e4d1908e1655570432de39ffc82933" }
 # TODO: remove this when new raft-rs is published.

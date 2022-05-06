@@ -27,6 +27,9 @@ test-engines-rocksdb = [
     "engine_test/test-engines-rocksdb",
 ]
 
+[target.'cfg(target_arch = "x86_64")'.dependencies]
+pprof = { version = "^0.6", default-features = false, features = ["flamegraph", "protobuf-codec", "protobuf", "cpp"] }
+
 [dependencies]
 clap = "2.32"
 futures = "0.3"
