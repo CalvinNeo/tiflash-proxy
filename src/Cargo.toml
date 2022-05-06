@@ -54,7 +54,7 @@ members = [
   "raftstore-proxy",
   "gen-proxy-ffi",
   "engine_tiflash",
-  "aaa",
+  "tests",
 ]
 default-members = ["raftstore-proxy"]
 

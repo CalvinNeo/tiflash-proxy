@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-// use tiproxy::raftstore_proxy::engine_store_ffi::{KVGetStatus, RaftStoreProxyFFI};
+use raftstore_proxy::engine_store_ffi::{KVGetStatus, RaftStoreProxyFFI};
 // use std::sync::{Arc, RwLock};
 
 // #[test]
