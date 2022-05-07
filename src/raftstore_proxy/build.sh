@@ -27,7 +27,7 @@ if [[ $(uname -s) == "Darwin" ]]; then
   export OPENSSL_STATIC=1
 fi
 
-PROXY_ENABLE_FEATURES=${PROXY_ENABLE_FEATURES} ./components/raftstore-proxy/cargo-build.sh
+PROXY_ENABLE_FEATURES=${PROXY_ENABLE_FEATURES} ./components/raftstore_proxy/cargo-build.sh
 
 target_name="lib${ENGINE_LABEL_VALUE}_proxy.${lib_suffix}"
 ori_build_path="target/${PROXY_PROFILE}/libraftstore_proxy.${lib_suffix}"

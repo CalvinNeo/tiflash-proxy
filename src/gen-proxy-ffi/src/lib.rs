@@ -88,7 +88,7 @@ fn make_version_file(version: VersionType, tar_version_head_path: &str) {
 pub fn gen_ffi_code() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let src_dir = format!(
-        "{}/../raftstore-proxy/ffi/src/RaftStoreProxyFFI",
+        "{}/../raftstore_proxy/ffi/src/RaftStoreProxyFFI",
         manifest_dir
     );
     let tar_file = format!(

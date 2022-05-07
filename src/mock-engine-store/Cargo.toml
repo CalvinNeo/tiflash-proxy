@@ -15,8 +15,12 @@ protobuf-codec = [
   "kvproto/protobuf-codec",
 ]
 testexport = ["raftstore/testexport", "tikv/testexport"]
+jemalloc = ["rocksdb/jemalloc"]
+portable = ["rocksdb/portable"]
+failpoints = ["fail/failpoints"]
 
 [dependencies]
+fail = "0.5"
 tikv = { path = "../../contrib/tikv", default-features = false }
 test_raftstore = { path = "../../contrib/tikv/components/test_raftstore" }
 server = { path = "../../contrib/tikv/components/server" }
@@ -29,5 +33,10 @@ slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global
 engine_traits = { path = "../../contrib/tikv/components/engine_traits", default-features = false }
 engine_rocks = { path = "../../contrib/tikv/components/engine_rocks", default-features = false }
 keys = { path = "../../contrib/tikv/components/keys", default-features = false }
-raftstore-proxy = { path = "../raftstore-proxy", default-features = false }
+raftstore_proxy = { path = "../raftstore_proxy", default-features = false }
 engine_tiflash = { path = "../engine_tiflash", default-features = false }
+
+[dependencies.rocksdb]
+git = "https://github.com/tikv/rust-rocksdb.git"
+package = "rocksdb"
+features = ["encryption"]

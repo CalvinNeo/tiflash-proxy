@@ -1,5 +1,6 @@
 #![feature(slice_take)]
 
+use raftstore_proxy;
 use engine_rocks::RocksEngine;
 use engine_tiflash::*;
 use raftstore_proxy::engine_store_ffi::interfaces::root::DB as ffi_interfaces;

@@ -19,12 +19,12 @@ rusoto_sts = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-
 [workspace]
 members = [
   "mock-engine-store",
-  "raftstore-proxy",
+  "raftstore_proxy",
   "gen-proxy-ffi",
   "engine_tiflash",
   "tests",
 ]
-default-members = ["raftstore-proxy"]
+default-members = ["raftstore_proxy"]
 
 [profile.dev]
 opt-level = 0
