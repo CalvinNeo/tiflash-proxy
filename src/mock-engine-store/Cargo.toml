@@ -16,7 +16,7 @@ protobuf-codec = [
 ]
 
 [dependencies]
-test_raftstore = { path = "../../contrib/tikv/components/server" }
+test_raftstore = { path = "../../contrib/tikv/components/test_raftstore" }
 server = { path = "../../contrib/tikv/components/server" }
 raftstore = { path = "../../contrib/tikv/components/raftstore", default-features = false }
 protobuf = "2.8.0"
@@ -27,3 +27,4 @@ slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global
 engine_traits = { path = "../../contrib/tikv/components/engine_traits", default-features = false }
 engine_rocks = { path = "../../contrib/tikv/components/engine_rocks", default-features = false }
 keys = { path = "../../contrib/tikv/components/keys", default-features = false }
+raftstore-proxy = { path = "../raftstore-proxy", default-features = false }

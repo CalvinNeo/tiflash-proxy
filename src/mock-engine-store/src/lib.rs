@@ -1,24 +1,17 @@
 #![feature(slice_take)]
 
 use engine_rocks::RocksEngine;
-use engine_store_ffi::interfaces::root::DB as ffi_interfaces;
-use engine_store_ffi::EngineStoreServerHelper;
-use engine_store_ffi::RaftStoreProxyFFIHelper;
-use engine_store_ffi::UnwrapExternCFunc;
+use raftstore_proxy::engine_store_ffi::interfaces::root::DB as ffi_interfaces;
+use raftstore_proxy::engine_store_ffi::{EngineStoreServerHelper, RaftStoreProxyFFIHelper, UnwrapExternCFunc, RawCppPtr};
 use engine_traits::{Engines, SyncMutable};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use protobuf::Message;
-use raftstore::engine_store_ffi;
-use raftstore::engine_store_ffi::RawCppPtr;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Mutex;
 use std::time::Duration;
 use tikv_util::{debug, info, warn};
-// use kvproto::raft_serverpb::{
-//     MergeState, PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData, RegionLocalState,
-// };
 
 type RegionId = u64;
 #[derive(Default, Clone)]
