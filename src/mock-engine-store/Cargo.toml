@@ -28,3 +28,4 @@ engine_traits = { path = "../../contrib/tikv/components/engine_traits", default-
 engine_rocks = { path = "../../contrib/tikv/components/engine_rocks", default-features = false }
 keys = { path = "../../contrib/tikv/components/keys", default-features = false }
 raftstore-proxy = { path = "../raftstore-proxy", default-features = false }
+engine_tiflash = { path = "../engine_tiflash", default-features = false }

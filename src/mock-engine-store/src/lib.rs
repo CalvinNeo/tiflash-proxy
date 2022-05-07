@@ -1,6 +1,7 @@
 #![feature(slice_take)]
 
 use engine_rocks::RocksEngine;
+use engine_tiflash::*;
 use raftstore_proxy::engine_store_ffi::interfaces::root::DB as ffi_interfaces;
 use raftstore_proxy::engine_store_ffi::{EngineStoreServerHelper, RaftStoreProxyFFIHelper, UnwrapExternCFunc, RawCppPtr};
 use engine_traits::{Engines, SyncMutable};
