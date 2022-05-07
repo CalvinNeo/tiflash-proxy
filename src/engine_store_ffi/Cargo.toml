@@ -1,13 +1,12 @@
 [package]
-name = "raftstore_proxy"
+name = "engine_store_ffi"
 version = "0.0.1"
 license = "Apache-2.0"
 edition = "2018"
 publish = false
 
 [lib]
-name = "raftstore_proxy"
-crate-type = ["cdylib"]
+name = "engine_store_ffi"
 
 [features]
 sse = ["engine_rocks/sse"]
@@ -78,4 +77,3 @@ serde_ignored = "0.1"
 tempfile = "3.0"
 lazy_static = "1.3"
 online_config = { path = "../../contrib/tikv/components/online_config" }
-engine_store_ffi = { path = "../engine_store_ffi", default-features = false }

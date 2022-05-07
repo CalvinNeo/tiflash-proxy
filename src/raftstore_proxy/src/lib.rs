@@ -4,8 +4,6 @@ use crate::proxy::proxy_version_info;
 use std::os::raw::{c_char, c_int};
 use tikv_util::*;
 
-pub mod engine_store_ffi;
-mod lock_cf_reader;
 mod proxy;
 mod run;
 mod rawserver;

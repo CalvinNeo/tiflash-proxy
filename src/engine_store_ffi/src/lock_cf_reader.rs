@@ -19,7 +19,7 @@ impl LockCFFileReader {
     pub fn ffi_get_cf_file_reader(
         path: &str,
         key_mgr: Option<&Arc<DataKeyManager>>,
-    ) -> crate::engine_store_ffi::RawVoidPtr {
+    ) -> crate::RawVoidPtr {
         let file = File::open(path).unwrap();
         let mut decoder: LockCFDecoder = if let Some(key_mgr) = key_mgr {
             let reader = get_decrypter_reader(path, key_mgr).unwrap();
@@ -41,12 +41,12 @@ impl LockCFFileReader {
         (!self.key.is_empty()) as u8
     }
 
-    pub fn ffi_key(&self) -> crate::engine_store_ffi::BaseBuffView {
+    pub fn ffi_key(&self) -> crate::BaseBuffView {
         let ori_key = keys::origin_key(&self.key);
         ori_key.into()
     }
 
-    pub fn ffi_val(&self) -> crate::engine_store_ffi::BaseBuffView {
+    pub fn ffi_val(&self) -> crate::BaseBuffView {
         self.val.as_slice().into()
     }
 

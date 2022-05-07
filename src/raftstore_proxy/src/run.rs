@@ -24,7 +24,7 @@ use raftstore::store::fsm::store::PENDING_MSG_CAP;
 
 use server::fatal;
 use tikv_util::{crit, info, warn, error, error_unknown, thd_name};
-use crate::engine_store_ffi::*;
+use engine_store_ffi::*;
 use std::time::Duration;
 use std::sync::atomic::AtomicU8;
 

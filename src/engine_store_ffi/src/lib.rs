@@ -1,8 +1,8 @@
 #[allow(dead_code)]
 pub mod interfaces;
-
-mod read_index_helper;
-mod utils;
+pub mod read_index_helper;
+pub mod utils;
+pub mod lock_cf_reader;
 
 use encryption::DataKeyManager;
 use engine_rocks::encryption::get_env;
@@ -19,18 +19,18 @@ use std::sync::Arc;
 
 pub use read_index_helper::ReadIndexClient;
 
-pub use crate::engine_store_ffi::interfaces::root::DB::{
+pub use interfaces::root::DB::{
     BaseBuffView, ColumnFamilyType, CppStrVecView, EngineStoreApplyRes, EngineStoreServerHelper,
     EngineStoreServerStatus, FileEncryptionRes, FsStats, HttpRequestRes, HttpRequestStatus,
     KVGetStatus, RaftCmdHeader, RaftProxyStatus, RaftStoreProxyFFIHelper, RawCppPtr,
     RawCppStringPtr, RawVoidPtr, SSTReaderPtr, StoreStats, WriteCmdType, WriteCmdsView,
 };
-use crate::engine_store_ffi::interfaces::root::DB::{
+use interfaces::root::DB::{
     ConstRawVoidPtr, FileEncryptionInfoRaw, RaftStoreProxyPtr, RawCppPtrType, RawRustPtr,
     SSTReaderInterfaces, SSTView, SSTViewVec, RAFT_STORE_PROXY_MAGIC_NUMBER,
     RAFT_STORE_PROXY_VERSION,
 };
-use crate::lock_cf_reader::LockCFFileReader;
+use lock_cf_reader::LockCFFileReader;
 use std::pin::Pin;
 use std::time;
 
@@ -256,7 +256,7 @@ impl Into<u32> for RawRustPtrType {
 
 pub extern "C" fn ffi_gc_rust_ptr(
     data: RawVoidPtr,
-    type_: crate::engine_store_ffi::interfaces::root::DB::RawRustPtrType,
+    type_: interfaces::root::DB::RawRustPtrType,
 ) {
     if data.is_null() {
         return;
@@ -348,7 +348,7 @@ pub extern "C" fn ffi_poll_read_index_task(
 ) -> u8 {
     assert!(!proxy_ptr.is_null());
     let task = unsafe {
-        &mut *(task_ptr as *mut crate::engine_store_ffi::read_index_helper::ReadIndexTask)
+        &mut *(task_ptr as *mut read_index_helper::ReadIndexTask)
     };
     let waker = if std::ptr::null_mut() == waker {
         None
