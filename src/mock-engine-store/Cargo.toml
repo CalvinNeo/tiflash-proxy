@@ -9,13 +9,15 @@ publish = false
 name = "mock_engine_store"
 
 [features]
-default = ["protobuf-codec"]
+default = ["protobuf-codec", "testexport"]
 protobuf-codec = [
   "protobuf/bytes",
   "kvproto/protobuf-codec",
 ]
+testexport = ["raftstore/testexport", "tikv/testexport"]
 
 [dependencies]
+tikv = { path = "../../contrib/tikv", default-features = false }
 test_raftstore = { path = "../../contrib/tikv/components/test_raftstore" }
 server = { path = "../../contrib/tikv/components/server" }
 raftstore = { path = "../../contrib/tikv/components/raftstore", default-features = false }
