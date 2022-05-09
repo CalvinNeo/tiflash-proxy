@@ -55,10 +55,10 @@ impl<T> UnwrapExternCFunc<T> for std::option::Option<T> {
 }
 
 pub struct RaftStoreProxy {
-    status: AtomicU8,
-    key_manager: Option<Arc<DataKeyManager>>,
-    read_index_client: Box<dyn read_index_helper::ReadIndex>,
-    kv_engine: std::sync::RwLock<Option<RocksEngine>>,
+    pub status: AtomicU8,
+    pub key_manager: Option<Arc<DataKeyManager>>,
+    pub read_index_client: Box<dyn read_index_helper::ReadIndex>,
+    pub kv_engine: std::sync::RwLock<Option<RocksEngine>>,
 }
 
 pub trait RaftStoreProxyFFI: Sync {
@@ -777,6 +777,10 @@ impl Drop for RawCppPtr {
 }
 
 static mut ENGINE_STORE_SERVER_HELPER_PTR: isize = 0;
+
+pub fn get_engine_store_server_helper_ptr() -> isize {
+    unsafe { ENGINE_STORE_SERVER_HELPER_PTR }
+}
 
 pub fn get_engine_store_server_helper() -> &'static EngineStoreServerHelper {
     gen_engine_store_server_helper(unsafe { ENGINE_STORE_SERVER_HELPER_PTR })

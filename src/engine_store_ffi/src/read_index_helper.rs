@@ -1,5 +1,4 @@
-use engine_tiflash::RocksEngine;
-use engine_traits::RaftEngine;
+use engine_traits::{RaftEngine, KvEngine};
 use futures::executor::block_on;
 use futures_util::compat::Future01CompatExt;
 use futures_util::future::BoxFuture;
@@ -29,12 +28,12 @@ pub trait ReadIndex: Sync + Send {
     ) -> Option<ReadIndexResponse>;
 }
 
-pub struct ReadIndexClient<ER: RaftEngine> {
-    pub routers: Vec<std::sync::Mutex<RaftRouter<RocksEngine, ER>>>,
+pub struct ReadIndexClient<ER: RaftEngine, EK: KvEngine> {
+    pub routers: Vec<std::sync::Mutex<RaftRouter<EK, ER>>>,
 }
 
-impl<ER: RaftEngine> ReadIndexClient<ER> {
-    pub fn new(router: RaftRouter<RocksEngine, ER>, cnt: usize) -> Self {
+impl<ER: RaftEngine, EK: KvEngine> ReadIndexClient<ER, EK> {
+    pub fn new(router: RaftRouter<EK, ER>, cnt: usize) -> Self {
         let mut routers = Vec::with_capacity(cnt);
         for _ in 0..cnt {
             routers.push(std::sync::Mutex::new(router.clone()));
@@ -100,7 +99,7 @@ fn gen_read_index_raft_cmd_req(req: &mut ReadIndexRequest) -> RaftCmdRequest {
     cmd
 }
 
-impl<ER: RaftEngine> ReadIndex for ReadIndexClient<ER> {
+impl<ER: RaftEngine, EK: KvEngine> ReadIndex for ReadIndexClient<ER, EK> {
     fn batch_read_index(
         &self,
         req_vec: Vec<ReadIndexRequest>,

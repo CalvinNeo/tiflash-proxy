@@ -1,6 +1,5 @@
 #![feature(slice_take)]
 
-use engine_rocks::RocksEngine;
 use engine_store_ffi::interfaces::root::DB as ffi_interfaces;
 use engine_store_ffi::{EngineStoreServerHelper, RaftStoreProxyFFIHelper, UnwrapExternCFunc, RawCppPtr};
 use engine_traits::{Engines, SyncMutable};
@@ -12,6 +11,14 @@ use std::pin::Pin;
 use std::sync::Mutex;
 use std::time::Duration;
 use tikv_util::{debug, info, warn};
+use test_raftstore::{Simulator, TestPdClient};
+use std::sync::{Arc, RwLock};
+use raftstore::store::RaftRouter;
+use tikv::config::TiKvConfig;
+use encryption::DataKeyManager;
+use tikv::server::{Node, Result as ServerResult};
+
+pub mod mock_cluster;
 
 type RegionId = u64;
 #[derive(Default, Clone)]
@@ -24,12 +31,12 @@ pub struct Region {
 
 pub struct EngineStoreServer {
     pub id: u64,
-    pub engines: Option<Engines<RocksEngine, RocksEngine>>,
+    pub engines: Option<Engines<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>>,
     pub kvstore: HashMap<RegionId, Box<Region>>,
 }
 
 impl EngineStoreServer {
-    pub fn new(id: u64, engines: Option<Engines<RocksEngine, RocksEngine>>) -> Self {
+    pub fn new(id: u64, engines: Option<Engines<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>>) -> Self {
         EngineStoreServer {
             id,
             engines,
@@ -600,3 +607,4 @@ unsafe extern "C" fn ffi_handle_compute_store_stats(
         engine_keys_read: 0,
     }
 }
+

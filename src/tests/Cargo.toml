@@ -79,4 +79,5 @@ lazy_static = "1.3"
 online_config = { path = "../../contrib/tikv/components/online_config" }
 
 mock-engine-store = { path = "../mock-engine-store", default-features = false }
-raftstore_proxy = { path = "../raftstore_proxy", default-features = false }
+engine_store_ffi = { path = "../engine_store_ffi", default-features = false }
+test_raftstore = { path = "../../contrib/tikv/components/test_raftstore", default-features = false }

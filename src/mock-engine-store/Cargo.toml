@@ -36,6 +36,7 @@ keys = { path = "../../contrib/tikv/components/keys", default-features = false }
 raftstore_proxy = { path = "../raftstore_proxy", default-features = false }
 engine_tiflash = { path = "../engine_tiflash", default-features = false }
 engine_store_ffi = { path = "../engine_store_ffi", default-features = false }
+encryption = { path = "../../contrib/tikv/components/encryption", default-features = false }
 
 [dependencies.rocksdb]
 git = "https://github.com/tikv/rust-rocksdb.git"

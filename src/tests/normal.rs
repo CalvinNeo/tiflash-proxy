@@ -1,16 +1,14 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use raftstore_proxy::engine_store_ffi::{KVGetStatus, RaftStoreProxyFFI};
+use engine_store_ffi::{KVGetStatus, RaftStoreProxyFFI};
 use std::sync::{Arc, RwLock};
+use test_raftstore::{TestPdClient, NodeCluster, must_get_equal};
 
 #[test]
 fn test_normal() {
     let pd_client = Arc::new(TestPdClient::new(0, false));
     let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
-    let mut cluster = Cluster::new(0, 3, sim, pd_client);
-    unsafe {
-        mock_engine_store::init_cluster_ptr(&cluster);
-    }
+    let mut cluster = mock_engine_store::mock_cluster::Cluster::new(0, 3, sim, pd_client);
 
     // Try to start this node, return after persisted some keys.
     let _ = cluster.start();
@@ -23,7 +21,7 @@ fn test_normal() {
     }
     let region_id = cluster.raw.get_region(k).get_id();
     unsafe {
-        for (_, ffi_set) in cluster.raw.ffi_helper_set.iter_mut() {
+        for (_, ffi_set) in cluster.ffi_helper_set.iter_mut() {
             let f = ffi_set.proxy_helper.fn_get_region_local_state.unwrap();
             let mut state = kvproto::raft_serverpb::RegionLocalState::default();
             let mut error_msg = mock_engine_store::RawCppStringPtrGuard::default();
