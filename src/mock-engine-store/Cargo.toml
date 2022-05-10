@@ -37,6 +37,17 @@ raftstore_proxy = { path = "../raftstore_proxy", default-features = false }
 engine_tiflash = { path = "../engine_tiflash", default-features = false }
 engine_store_ffi = { path = "../engine_store_ffi", default-features = false }
 encryption = { path = "../../contrib/tikv/components/encryption", default-features = false }
+test_util = { path = "../../contrib/tikv/components/test_util", default-features = false }
+tempfile = "3.0"
+file_system = { path = "../../contrib/tikv/components/file_system", default-features = false }
+encryption_export = { path = "../../contrib/tikv/components/encryption/export", default-features = false }
+collections = { path = "../../contrib/tikv/components/collections", default-features = false }
+
+raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
+concurrency_manager = { path = "../../contrib/tikv/components/concurrency_manager", default-features = false }
+resource_metering = { path = "../../contrib/tikv/components/resource_metering" }
+crossbeam = "0.8"
+rand = "0.8"
 
 [dependencies.rocksdb]
 git = "https://github.com/tikv/rust-rocksdb.git"

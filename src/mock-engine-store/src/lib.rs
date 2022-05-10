@@ -19,6 +19,8 @@ use encryption::DataKeyManager;
 use tikv::server::{Node, Result as ServerResult};
 
 pub mod mock_cluster;
+pub mod node;
+pub mod transport_simulate;
 
 type RegionId = u64;
 #[derive(Default, Clone)]

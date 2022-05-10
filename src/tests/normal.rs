@@ -2,7 +2,8 @@
 
 use engine_store_ffi::{KVGetStatus, RaftStoreProxyFFI};
 use std::sync::{Arc, RwLock};
-use test_raftstore::{TestPdClient, NodeCluster, must_get_equal};
+use test_raftstore::{TestPdClient, must_get_equal};
+use mock_engine_store::node::NodeCluster;
 
 #[test]
 fn test_normal() {
@@ -13,12 +14,16 @@ fn test_normal() {
     // Try to start this node, return after persisted some keys.
     let _ = cluster.start();
 
-    let k = b"k1";
-    let v = b"v1";
-    cluster.raw.must_put(k, v);
-    for id in cluster.raw.engines.keys() {
-        must_get_equal(&cluster.raw.get_engine(*id), k, v);
+    for i in 0..10 {
+        let k = format!("k{}", i);
+        let v = format!("v{}", i);
+        cluster.raw.must_put(k.as_bytes(), v.as_bytes());
+        for id in cluster.raw.engines.keys() {
+            must_get_equal(&cluster.raw.get_engine(*id), k.as_bytes(), v.as_bytes());
+        }
     }
+
+    let k = "k1".as_bytes();
     let region_id = cluster.raw.get_region(k).get_id();
     unsafe {
         for (_, ffi_set) in cluster.ffi_helper_set.iter_mut() {
@@ -82,4 +87,5 @@ fn test_normal() {
     }
 
     cluster.raw.shutdown();
+    panic!();
 }
