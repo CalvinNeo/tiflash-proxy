@@ -2,7 +2,7 @@
 
 use engine_store_ffi::{KVGetStatus, RaftStoreProxyFFI};
 use std::sync::{Arc, RwLock};
-use test_raftstore::{TestPdClient, must_get_equal};
+use test_raftstore::{TestPdClient, must_get_equal, must_get_none};
 use mock_engine_store::node::NodeCluster;
 extern crate rocksdb;
 use ::rocksdb::{DB};
@@ -12,6 +12,7 @@ use engine_traits::{Error, Result};
 use engine_traits::{ExternalSstFileInfo, SstExt, SstReader, SstWriter, SstWriterBuilder};
 use engine_tiflash::*;
 use engine_traits::Iterable;
+use engine_traits::Peekable;
 use engine_traits::{CF_RAFT,CF_LOCK,CF_WRITE,CF_DEFAULT};
 use crate::normal::rocksdb::Writable;
 
@@ -29,9 +30,35 @@ fn test_normal() {
         let v = format!("v{}", i);
         cluster.raw.must_put(k.as_bytes(), v.as_bytes());
         for id in cluster.raw.engines.keys() {
-            must_get_equal(&cluster.raw.get_engine(*id), k.as_bytes(), v.as_bytes());
+            let engine = &cluster.raw.get_engine(*id);
+            // We can get nothing, since engine_tiflash filters all data.
+            must_get_none(engine, k.as_bytes());
         }
     }
+
+    for id in cluster.raw.engines.keys() {
+        let r1 = cluster.raw.get_region(b"k1").get_id();
+        let db = cluster.raw.get_engine(*id);
+        let engine = engine_rocks::RocksEngine::from_db(db);
+        // We can still get RegionLocalState
+        let region_state_key = keys::region_state_key(r1);
+        match engine.get_msg_cf::<kvproto::raft_serverpb::RegionLocalState>(CF_RAFT, &region_state_key) {
+            Ok(Some(_)) => (),
+            _ => unreachable!(),
+        };
+
+        let region_state_key = keys::apply_state_key(r1);
+        match engine.get_msg_cf::<kvproto::raft_serverpb::RaftApplyState>(CF_RAFT, &region_state_key) {
+            Ok(Some(_)) => (),
+            _ => unreachable!(),
+        };
+
+        match engine.get_msg::<kvproto::raft_serverpb::StoreIdent>(keys::STORE_IDENT_KEY){
+            Ok(Some(_)) => (),
+            _ => unreachable!(),
+        };
+    }
+
 
     // get RegionLocalState through ffi
     let k = "k1".as_bytes();

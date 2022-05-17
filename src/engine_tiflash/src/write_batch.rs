@@ -99,36 +99,58 @@ impl engine_traits::WriteBatch for RocksWriteBatch {
     }
 }
 
+
+impl RocksWriteBatch {
+    fn do_write(&self, cf: &str, key: &[u8]) -> bool {
+        match cf {
+            engine_traits::CF_RAFT => true,
+            engine_traits::CF_DEFAULT => {
+                key == keys::PREPARE_BOOTSTRAP_KEY || key == keys::STORE_IDENT_KEY
+            }
+            _ => false
+        }
+    }
+}
+
 impl Mutable for RocksWriteBatch {
     fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
-        self.wb.put(key, value).map_err(Error::Engine)
+        if self.do_write(engine_traits::CF_DEFAULT, key) {
+            return self.wb.put(key, value).map_err(Error::Engine);
+        }
+        Ok(())
     }
 
     fn put_cf(&mut self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
-        let handle = get_cf_handle(self.db.as_ref(), cf)?;
-        self.wb.put_cf(handle, key, value).map_err(Error::Engine)
+        if self.do_write(cf, key) {
+            let handle = get_cf_handle(self.db.as_ref(), cf)?;
+            return self.wb.put_cf(handle, key, value).map_err(Error::Engine)
+        }
+        Ok(())
     }
 
     fn delete(&mut self, key: &[u8]) -> Result<()> {
-        self.wb.delete(key).map_err(Error::Engine)
+        if self.do_write(engine_traits::CF_DEFAULT, key) {
+            return self.wb.delete(key).map_err(Error::Engine);
+        }
+        Ok(())
     }
 
     fn delete_cf(&mut self, cf: &str, key: &[u8]) -> Result<()> {
-        let handle = get_cf_handle(self.db.as_ref(), cf)?;
-        self.wb.delete_cf(handle, key).map_err(Error::Engine)
+        if self.do_write(cf, key) {
+            let handle = get_cf_handle(self.db.as_ref(), cf)?;
+            return self.wb.delete_cf(handle, key).map_err(Error::Engine)
+        }
+        Ok(())
     }
 
     fn delete_range(&mut self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
-        self.wb
-            .delete_range(begin_key, end_key)
-            .map_err(Error::Engine)
+        // do nothing
+        Ok(())
     }
 
     fn delete_range_cf(&mut self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
-        let handle = get_cf_handle(self.db.as_ref(), cf)?;
-        self.wb
-            .delete_range_cf(handle, begin_key, end_key)
-            .map_err(Error::Engine)
+        // do nothing
+        Ok(())
     }
 }
 

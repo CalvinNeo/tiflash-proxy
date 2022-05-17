@@ -159,36 +159,57 @@ impl Peekable for RocksEngine {
     }
 }
 
+impl RocksEngine {
+    fn do_write(&self, cf: &str, key: &[u8]) -> bool {
+        match cf {
+            engine_traits::CF_RAFT => true,
+            engine_traits::CF_DEFAULT => {
+                key == keys::PREPARE_BOOTSTRAP_KEY || key == keys::STORE_IDENT_KEY
+            }
+            _ => false
+        }
+    }
+}
+
 impl SyncMutable for RocksEngine {
     fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
-        self.rocks.db.put(key, value).map_err(Error::Engine)
+        if self.do_write(engine_traits::CF_DEFAULT, key) {
+            return self.rocks.db.put(key, value).map_err(Error::Engine);
+        }
+        Ok(())
     }
 
     fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
-        let handle = get_cf_handle(&self.rocks.db, cf)?;
-        self.rocks.db.put_cf(handle, key, value).map_err(Error::Engine)
+        if self.do_write(cf, key) {
+            let handle = get_cf_handle(&self.rocks.db, cf)?;
+            return self.rocks.db.put_cf(handle, key, value).map_err(Error::Engine);
+        }
+        Ok(())
     }
 
     fn delete(&self, key: &[u8]) -> Result<()> {
-        self.rocks.db.delete(key).map_err(Error::Engine)
+        if self.do_write(engine_traits::CF_DEFAULT, key) {
+            return self.rocks.db.delete(key).map_err(Error::Engine);
+        }
+        Ok(())
     }
 
     fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<()> {
-        let handle = get_cf_handle(&self.rocks.db, cf)?;
-        self.rocks.db.delete_cf(handle, key).map_err(Error::Engine)
+        if self.do_write(cf, key) {
+            let handle = get_cf_handle(&self.rocks.db, cf)?;
+            return self.rocks.db.delete_cf(handle, key).map_err(Error::Engine);
+        }
+        Ok(())
     }
 
     fn delete_range(&self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
-        self.rocks.db
-            .delete_range(begin_key, end_key)
-            .map_err(Error::Engine)
+        // do nothing
+        Ok(())
     }
 
     fn delete_range_cf(&self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
-        let handle = get_cf_handle(&self.rocks.db, cf)?;
-        self.rocks.db
-            .delete_range_cf(handle, begin_key, end_key)
-            .map_err(Error::Engine)
+        // do nothing
+        Ok(())
     }
 }
 
