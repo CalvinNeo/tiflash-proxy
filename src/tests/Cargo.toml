@@ -81,3 +81,5 @@ online_config = { path = "../../contrib/tikv/components/online_config" }
 mock-engine-store = { path = "../mock-engine-store", default-features = false }
 engine_store_ffi = { path = "../engine_store_ffi", default-features = false }
 test_raftstore = { path = "../../contrib/tikv/components/test_raftstore", default-features = false }
+
+rocksdb = {git = "https://github.com/tikv/rust-rocksdb.git", package = "rocksdb", features = ["encryption"]}

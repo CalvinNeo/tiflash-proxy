@@ -489,7 +489,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         gc_worker
     }
 
-    pub fn init_servers<Api: APIVersion>(&mut self) -> Arc<VersionTrack<ServerConfig>> {
+    pub fn init_servers<Api: APIVersion>(&mut self, engine_store_server_helper: isize) -> Arc<VersionTrack<ServerConfig>> {
         let flow_controller = Arc::new(FlowController::new(
             &self.config.storage.flow_control,
             self.engines.as_ref().unwrap().engine.kv_engine(),
@@ -729,6 +729,13 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         );
         node.try_bootstrap_store(engines.engines.clone())
             .unwrap_or_else(|e| fatal!("failed to bootstrap node id: {}", e));
+
+        {
+            engine_store_ffi::gen_engine_store_server_helper(
+                engine_store_server_helper,
+            ).set_store(node.store());
+            info!("set store {} to engine-store", node.id());
+        }
 
         self.snap_mgr = Some(snap_mgr.clone());
         // Create server

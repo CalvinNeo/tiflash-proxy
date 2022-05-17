@@ -142,10 +142,10 @@ fn run_impl<CER: ConfiguredRaftEngine, Api: APIVersion>(config: TiKvConfig, engi
 
     proxy.set_status(RaftProxyStatus::Running);
 
-    let server_config = tikv.init_servers::<Api>();
+    let server_config = tikv.init_servers::<Api>(engine_store_server_helper);
     tikv.register_services();
     tikv.init_metrics_flusher(fetcher, engines_info);
-    // tikv.init_storage_stats_task(engines);
+    tikv.init_storage_stats_task(engines);
     tikv.run_server(server_config);
     tikv.run_status_server();
 

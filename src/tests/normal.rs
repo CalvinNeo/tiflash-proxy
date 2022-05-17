@@ -4,6 +4,16 @@ use engine_store_ffi::{KVGetStatus, RaftStoreProxyFFI};
 use std::sync::{Arc, RwLock};
 use test_raftstore::{TestPdClient, must_get_equal};
 use mock_engine_store::node::NodeCluster;
+extern crate rocksdb;
+use ::rocksdb::{DB};
+use engine_traits::Iterator;
+use engine_traits::SeekKey;
+use engine_traits::{Error, Result};
+use engine_traits::{ExternalSstFileInfo, SstExt, SstReader, SstWriter, SstWriterBuilder};
+use engine_tiflash::*;
+use engine_traits::Iterable;
+use engine_traits::{CF_RAFT,CF_LOCK,CF_WRITE,CF_DEFAULT};
+use crate::normal::rocksdb::Writable;
 
 #[test]
 fn test_normal() {
@@ -23,6 +33,7 @@ fn test_normal() {
         }
     }
 
+    // get RegionLocalState through ffi
     let k = "k1".as_bytes();
     let region_id = cluster.raw.get_region(k).get_id();
     unsafe {
@@ -70,6 +81,7 @@ fn test_normal() {
                     assert!(res.is_none());
                 });
 
+            // If we have no kv engine.
             ffi_set.proxy.set_kv_engine(None);
             let res = ffi_set.proxy_helper.fn_get_region_local_state.unwrap()(
                 ffi_set.proxy_helper.proxy_ptr,

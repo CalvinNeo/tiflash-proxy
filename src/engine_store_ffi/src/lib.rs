@@ -57,7 +57,9 @@ impl<T> UnwrapExternCFunc<T> for std::option::Option<T> {
 pub struct RaftStoreProxy {
     pub status: AtomicU8,
     pub key_manager: Option<Arc<DataKeyManager>>,
+    // send a ReadIndex through RaftRouter
     pub read_index_client: Box<dyn read_index_helper::ReadIndex>,
+    // this kv engine to currently used to read RegionLocalState
     pub kv_engine: std::sync::RwLock<Option<RocksEngine>>,
 }
 
