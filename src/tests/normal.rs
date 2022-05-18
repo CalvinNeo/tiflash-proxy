@@ -25,7 +25,8 @@ fn test_normal() {
     // Try to start this node, return after persisted some keys.
     let _ = cluster.start();
 
-    for i in 0..10 {
+    let total = 1;
+    for i in 0..total {
         let k = format!("k{}", i);
         let v = format!("v{}", i);
         cluster.raw.must_put(k.as_bytes(), v.as_bytes());

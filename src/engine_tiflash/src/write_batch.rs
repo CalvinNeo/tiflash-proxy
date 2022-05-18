@@ -1,5 +1,4 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
-
 use std::sync::Arc;
 
 use crate::engine::RocksEngine;
@@ -99,16 +98,28 @@ impl engine_traits::WriteBatch for RocksWriteBatch {
     }
 }
 
+use std::backtrace::Backtrace;
+pub fn do_write(cf: &str, key: &[u8]) -> bool {
+    match cf {
+        engine_traits::CF_RAFT => {
+            if key.starts_with(keys::REGION_RAFT_PREFIX_KEY) && key.ends_with(&[keys::APPLY_STATE_SUFFIX]) {
+                let b = Backtrace::capture();
+                println!("!!!! do_write {} {:?} {:?}", cf, key, b);
+                true
+            } else {
+                true
+            }
+        },
+        engine_traits::CF_DEFAULT => {
+            key == keys::PREPARE_BOOTSTRAP_KEY || key == keys::STORE_IDENT_KEY
+        }
+        _ => false
+    }
+}
 
 impl RocksWriteBatch {
     fn do_write(&self, cf: &str, key: &[u8]) -> bool {
-        match cf {
-            engine_traits::CF_RAFT => true,
-            engine_traits::CF_DEFAULT => {
-                key == keys::PREPARE_BOOTSTRAP_KEY || key == keys::STORE_IDENT_KEY
-            }
-            _ => false
-        }
+        do_write(cf, key)
     }
 }
 

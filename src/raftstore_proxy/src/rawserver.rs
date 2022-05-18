@@ -679,6 +679,13 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             causal_ob.register_to(self.coprocessor_host.as_mut().unwrap());
         }
 
+        // Register TiFlash observer
+        let tiflash_ob = engine_store_ffi::observer::TiFlashObserver::new(
+            engine_store_ffi::gen_engine_store_server_helper(engine_store_server_helper),
+            self.engines.as_ref().unwrap().engines.kv.clone(),
+        );
+        tiflash_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+
         // Register cdc.
         let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
         cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());

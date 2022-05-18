@@ -13,6 +13,7 @@
 //! renaming and make it obvious what type any particular module is working with.
 //!
 //! Please read the engine_trait crate docs before hacking.
+#![feature(backtrace)]
 
 #![cfg_attr(test, feature(test))]
 
