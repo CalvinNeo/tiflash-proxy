@@ -161,13 +161,7 @@ impl Peekable for RocksEngine {
 
 impl RocksEngine {
     fn do_write(&self, cf: &str, key: &[u8]) -> bool {
-        match cf {
-            engine_traits::CF_RAFT => true,
-            engine_traits::CF_DEFAULT => {
-                key == keys::PREPARE_BOOTSTRAP_KEY || key == keys::STORE_IDENT_KEY
-            }
-            _ => false
-        }
+        crate::do_write(cf, key)
     }
 }
 
