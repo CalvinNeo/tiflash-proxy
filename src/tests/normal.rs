@@ -20,11 +20,12 @@ use crate::normal::rocksdb::Writable;
 use kvproto::raft_serverpb::{RegionLocalState, RaftApplyState, StoreIdent};
 use std::io::{self, Write, Read};
 use tikv::config::TiKvConfig;
+use engine_store_ffi::config::ensure_no_common_unrecognized_keys;
 
 #[test]
 fn test_config() {
     let mut file = tempfile::NamedTempFile::new().unwrap();
-    let text = "memory-usage-high-water=0.65\nsnap-handle-pool-size=4\n[nosense]\nfoo=2\n[rocksdb]\nmax-open-files = 111";
+    let text = "memory-usage-high-water=0.65\nsnap-handle-pool-size=4\n[nosense]\nfoo=2\n[rocksdb]\nmax-open-files = 111\nz=1";
     write!(file, "{}", text);
     let path = file.path();
 
@@ -35,12 +36,21 @@ fn test_config() {
     ).unwrap();
     assert_eq!(config.memory_usage_high_water, 0.65);
     assert_eq!(config.rocksdb.max_open_files, 111);
-    assert_eq!(unrecognized_keys.len(), 2);
+    assert_eq!(unrecognized_keys.len(), 3);
 
+    let mut proxy_unrecognized_keys = Vec::new();
     let proxy_config = engine_store_ffi::config::ProxyConfig::from_file(
         path,
+        Some(&mut proxy_unrecognized_keys)
     ).unwrap();
     assert_eq!(proxy_config.snap_handle_pool_size, 4);
+    let unknown = ensure_no_common_unrecognized_keys(&vec!["a.b", "b"].iter().map(|e| String::from(*e)).collect(),
+                                                     &vec!["a.b", "b.b", "c"].iter().map(|e| String::from(*e)).collect());
+    assert_eq!(unknown.is_err(), true);
+    assert_eq!(unknown.unwrap_err(), "a.b, b.b");
+    let unknown = ensure_no_common_unrecognized_keys(&proxy_unrecognized_keys, &unrecognized_keys);
+    assert_eq!(unknown.is_err(), true);
+    assert_eq!(unknown.unwrap_err(), "nosense, rocksdb.z");
 
     // Need ENGINE_LABEL_VALUE=tiflash, otherwise will fatal exit.
     server::setup::validate_and_persist_config(&mut config, true);
@@ -48,8 +58,11 @@ fn test_config() {
     // Will not override ProxyConfig
     let proxy_config_new = engine_store_ffi::config::ProxyConfig::from_file(
         path,
+        None
     ).unwrap();
     assert_eq!(proxy_config_new.snap_handle_pool_size, 4);
+
+
 }
 
 #[test]

@@ -287,16 +287,9 @@ pub unsafe fn run_proxy(
     }
     config.server.advertise_addr = "".to_string();
 
-
     config.logger_compatible_adjust();
 
-    if is_config_check {
-        validate_and_persist_config(&mut config, false);
-        ensure_no_unrecognized_config(&unrecognized_keys);
-        println!("config check successful");
-        process::exit(0)
-    }
-
+    let mut proxy_unrecognized_keys = Vec::new();
     // Double read the same file for proxy-specific arguments.
     let mut proxy_config = matches
         .value_of_os("config")
@@ -304,6 +297,11 @@ pub unsafe fn run_proxy(
             let path = Path::new(path);
             engine_store_ffi::config::ProxyConfig::from_file(
                 path,
+                if is_config_check {
+                    Some(&mut proxy_unrecognized_keys)
+                } else {
+                    None
+                },
             )
             .unwrap_or_else(|e| {
                 panic!(
@@ -313,6 +311,21 @@ pub unsafe fn run_proxy(
                 );
             })
         });
+
+    if is_config_check {
+        validate_and_persist_config(&mut config, false);
+        match engine_store_ffi::config::ensure_no_common_unrecognized_keys(&proxy_unrecognized_keys, &unrecognized_keys) {
+            Ok(_) => (),
+            Err(e) => {
+                server::fatal!(
+                    "unknown configuration options: {}",
+                    e
+                );
+            },
+        }
+        println!("config check successful");
+        process::exit(0)
+    }
 
     crate::run::run_tikv(config, proxy_config, engine_store_server_helper as *const _ as isize);
 }
