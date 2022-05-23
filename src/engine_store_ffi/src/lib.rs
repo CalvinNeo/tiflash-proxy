@@ -4,6 +4,7 @@ pub mod read_index_helper;
 pub mod utils;
 pub mod lock_cf_reader;
 pub mod observer;
+pub mod config;
 
 use encryption::DataKeyManager;
 use engine_rocks::encryption::get_env;

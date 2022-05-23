@@ -72,6 +72,7 @@ causal_ts = { path = "../../contrib/tikv/components/causal_ts" }
 libc = "0.2"
 backup = { path = "../../contrib/tikv/components/backup", default-features = false }
 
+serde = "1.0"
 serde_derive = "1.0"
 serde_ignored = "0.1"
 tempfile = "3.0"
@@ -83,3 +84,5 @@ engine_store_ffi = { path = "../engine_store_ffi", default-features = false }
 test_raftstore = { path = "../../contrib/tikv/components/test_raftstore", default-features = false }
 
 rocksdb = {git = "https://github.com/tikv/rust-rocksdb.git", package = "rocksdb", features = ["encryption"]}
+
+external_storage_export = { path = "../../contrib/tikv/components/external_storage/export", default-features = false }

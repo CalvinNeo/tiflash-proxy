@@ -105,9 +105,10 @@ use tokio::runtime::Builder;
 
 use server::raft_engine_switch::*;
 use server::{memory::*, setup::*, signal_handler};
-
 use server::fatal;
 use tikv_util::{crit, info, warn, error, error_unknown, thd_name};
+
+use engine_store_ffi::config::ProxyConfig;
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
@@ -119,6 +120,7 @@ const DEFAULT_STORAGE_STATS_INTERVAL: Duration = Duration::from_secs(1);
 /// A complete TiKV server.
 pub struct TiKVServer<ER: RaftEngine> {
     pub config: TiKvConfig,
+    pub proxy_config: ProxyConfig,
     pub cfg_controller: Option<ConfigController>,
     security_mgr: Arc<SecurityManager>,
     pd_client: Arc<RpcClient>,
@@ -164,7 +166,7 @@ Server<RaftRouter<EK, ER>, resolve::PdStoreAddrResolver, LocalRaftKv<EK, ER>>;
 type LocalRaftKv<EK, ER> = RaftKv<EK, ServerRaftStoreRouter<EK, ER>>;
 
 impl<ER: RaftEngine> TiKVServer<ER> {
-    pub fn init(mut config: TiKvConfig) -> TiKVServer<ER> {
+    pub fn init(mut config: TiKvConfig, proxy_config: ProxyConfig) -> TiKVServer<ER> {
         tikv_util::thread_group::set_properties(Some(GroupProperties::default()));
         // It is okay use pd config and security config before `init_config`,
         // because these configs must be provided by command line, and only
@@ -217,6 +219,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
         TiKVServer {
             config,
+            proxy_config,
             cfg_controller: Some(cfg_controller),
             security_mgr,
             pd_client,
@@ -679,13 +682,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             causal_ob.register_to(self.coprocessor_host.as_mut().unwrap());
         }
 
-        // Register TiFlash observer
-        let tiflash_ob = engine_store_ffi::observer::TiFlashObserver::new(
-            engine_store_ffi::gen_engine_store_server_helper(engine_store_server_helper),
-            self.engines.as_ref().unwrap().engines.kv.clone(),
-        );
-        tiflash_ob.register_to(self.coprocessor_host.as_mut().unwrap());
-
         // Register cdc.
         let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
         cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
@@ -736,7 +732,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         );
         node.try_bootstrap_store(engines.engines.clone())
             .unwrap_or_else(|e| fatal!("failed to bootstrap node id: {}", e));
-
         {
             engine_store_ffi::gen_engine_store_server_helper(
                 engine_store_server_helper,
@@ -768,8 +763,8 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.env.clone(),
             unified_read_pool,
             debug_thread_pool,
-        )
-            .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
+        ).unwrap_or_else(|e| fatal!("failed to create server: {}", e));
+
         cfg_controller.register(
             tikv::config::Module::Server,
             Box::new(ServerConfigManager::new(
@@ -784,8 +779,8 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             import_path,
             self.encryption_key_manager.clone(),
             self.config.storage.api_version(),
-        )
-            .unwrap();
+        ).unwrap();
+
         for (cf_name, compression_type) in &[
             (
                 CF_DEFAULT,
@@ -799,6 +794,16 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             importer.set_compression_type(cf_name, from_rocks_compression_type(*compression_type));
         }
         let importer = Arc::new(importer);
+
+        // Register TiFlash observer
+        let snap_handle_pool_size = self.proxy_config.snap_handle_pool_size;
+        let tiflash_ob = engine_store_ffi::observer::TiFlashObserver::new(
+            engine_store_ffi::gen_engine_store_server_helper(engine_store_server_helper),
+            self.engines.as_ref().unwrap().engines.kv.clone(),
+            importer.clone(),
+            snap_handle_pool_size,
+        );
+        tiflash_ob.register_to(self.coprocessor_host.as_mut().unwrap());
 
         let split_check_runner = SplitCheckRunner::new(
             engines.engines.kv.clone(),

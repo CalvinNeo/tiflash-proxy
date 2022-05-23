@@ -4,6 +4,8 @@ use engine_store_ffi::{KVGetStatus, RaftStoreProxyFFI};
 use std::sync::{Arc, RwLock};
 use test_raftstore::{TestPdClient, must_get_equal, must_get_none};
 use mock_engine_store::node::NodeCluster;
+use std::collections::HashMap;
+
 extern crate rocksdb;
 use ::rocksdb::{DB};
 use engine_traits::Iterator;
@@ -13,8 +15,41 @@ use engine_traits::{ExternalSstFileInfo, SstExt, SstReader, SstWriter, SstWriter
 use engine_tiflash::*;
 use engine_traits::Iterable;
 use engine_traits::Peekable;
-use engine_traits::{CF_RAFT,CF_LOCK,CF_WRITE,CF_DEFAULT};
+use engine_traits::{CF_RAFT, CF_LOCK, CF_WRITE, CF_DEFAULT};
 use crate::normal::rocksdb::Writable;
+use kvproto::raft_serverpb::{RegionLocalState, RaftApplyState, StoreIdent};
+use std::io::{self, Write, Read};
+use tikv::config::TiKvConfig;
+
+#[test]
+fn test_config() {
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    let text = "memory-usage-high-water=0.65\nsnap-handle-pool-size=4\n[nosense]\nfoo=2\n[rocksdb]\nmax-open-files = 111";
+    write!(file, "{}", text);
+    let path = file.path();
+    let mut unrecognized_keys = Vec::new();
+
+    let mut config = TiKvConfig::from_file(
+        path,
+        Some(&mut unrecognized_keys)
+    ).unwrap();
+    assert_eq!(config.memory_usage_high_water, 0.65);
+    assert_eq!(config.rocksdb.max_open_files, 111);
+    assert_eq!(unrecognized_keys.len(), 2);
+
+    let proxy_config = engine_store_ffi::config::ProxyConfig::from_file(
+        path,
+    ).unwrap();
+    assert_eq!(proxy_config.snap_handle_pool_size, 4);
+
+    // Need ENGINE_LABEL_VALUE=tiflash, otherwise will fatal exit.
+    server::setup::validate_and_persist_config(&mut config, true);
+
+    let proxy_config2 = engine_store_ffi::config::ProxyConfig::from_file(
+        path,
+    ).unwrap();
+    assert_eq!(proxy_config2.snap_handle_pool_size, 4);
+}
 
 #[test]
 fn test_normal() {
@@ -36,29 +71,56 @@ fn test_normal() {
         }
     }
 
+    // We can read initial raft state
+    let mut prev_apply_state: HashMap<u64, RaftApplyState> = HashMap::default();
     for id in cluster.raw.engines.keys() {
         let r1 = cluster.raw.get_region(b"k1").get_id();
         let db = cluster.raw.get_engine(*id);
         let engine = engine_rocks::RocksEngine::from_db(db);
         // We can still get RegionLocalState
         let region_state_key = keys::region_state_key(r1);
-        match engine.get_msg_cf::<kvproto::raft_serverpb::RegionLocalState>(CF_RAFT, &region_state_key) {
+        match engine.get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key) {
             Ok(Some(_)) => (),
             _ => unreachable!(),
         };
 
         let region_state_key = keys::apply_state_key(r1);
-        match engine.get_msg_cf::<kvproto::raft_serverpb::RaftApplyState>(CF_RAFT, &region_state_key) {
-            Ok(Some(_)) => (),
+        let apply_state = match engine.get_msg_cf::<RaftApplyState>(CF_RAFT, &region_state_key) {
+            Ok(Some(s)) => s,
             _ => unreachable!(),
         };
+        prev_apply_state.insert(*id, apply_state);
 
-        match engine.get_msg::<kvproto::raft_serverpb::StoreIdent>(keys::STORE_IDENT_KEY){
+        match engine.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY){
             Ok(Some(_)) => (),
             _ => unreachable!(),
         };
     }
 
+    for i in 10..20 {
+        let k = format!("k{}", i);
+        let v = format!("v{}", i);
+        cluster.raw.must_put(k.as_bytes(), v.as_bytes());
+        for id in cluster.raw.engines.keys() {
+            let engine = &cluster.raw.get_engine(*id);
+            // We can get nothing, since engine_tiflash filters all data.
+            must_get_none(engine, k.as_bytes());
+        }
+    }
+
+    for id in cluster.raw.engines.keys() {
+        let r1 = cluster.raw.get_region(b"k1").get_id();
+        let db = cluster.raw.get_engine(*id);
+        let engine = engine_rocks::RocksEngine::from_db(db);
+
+        let region_state_key = keys::apply_state_key(r1);
+        let apply_state = match engine.get_msg_cf::<RaftApplyState>(CF_RAFT, &region_state_key) {
+            Ok(Some(s)) => s,
+            _ => unreachable!(),
+        };
+
+        assert_eq!(&apply_state, prev_apply_state.get(&id).unwrap());
+    }
 
     // get RegionLocalState through ffi
     let k = "k1".as_bytes();

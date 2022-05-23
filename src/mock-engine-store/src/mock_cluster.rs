@@ -59,6 +59,9 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
         sim: Arc<RwLock<T>>,
         pd_client: Arc<TestPdClient>,
     ) -> Cluster<T> {
+        // Force sync to enable Leader run as a Leader, rather than proxy
+        fail::cfg("apply_on_handle_snapshot_sync", "return").unwrap();
+
         let mut cls = test_raftstore::Cluster::new(id, count, sim, pd_client,
 create_tiflash_test_engine, |r: &engine_tiflash::RocksEngine| Arc::clone(r.rocks.as_inner()));
         Cluster {

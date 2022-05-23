@@ -9,6 +9,7 @@ use slog_global::*;
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_int};
 use tikv::config::TiKvConfig;
+use engine_store_ffi::config::ProxyConfig;
 
 pub fn proxy_version_info() -> String {
     let fallback = "Unknown (env var does not exist when building)";
@@ -296,7 +297,24 @@ pub unsafe fn run_proxy(
         process::exit(0)
     }
 
-    crate::run::run_tikv(config, engine_store_server_helper as *const _ as isize);
+    // Double read the same file for proxy-specific arguments.
+    let mut proxy_config = matches
+        .value_of_os("config")
+        .map_or_else(engine_store_ffi::config::ProxyConfig::default, |path| {
+            let path = Path::new(path);
+            engine_store_ffi::config::ProxyConfig::from_file(
+                path,
+            )
+            .unwrap_or_else(|e| {
+                panic!(
+                    "invalid auto generated configuration file {}, err {}",
+                    path.display(),
+                    e
+                );
+            })
+        });
+
+    crate::run::run_tikv(config, proxy_config, engine_store_server_helper as *const _ as isize);
 }
 
 fn check_engine_label(matches: &clap::ArgMatches<'_>) {

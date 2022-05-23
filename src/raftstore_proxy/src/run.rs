@@ -27,6 +27,7 @@ use tikv_util::{crit, info, warn, error, error_unknown, thd_name};
 use engine_store_ffi::*;
 use std::time::Duration;
 use std::sync::atomic::AtomicU8;
+use engine_store_ffi::config::ProxyConfig;
 
 pub fn init_tiflash_engines<CER: ConfiguredRaftEngine>(
     tikv: &mut rawserver::TiKVServer<CER>,
@@ -84,8 +85,8 @@ pub fn init_tiflash_engines<CER: ConfiguredRaftEngine>(
 }
 
 #[inline]
-fn run_impl<CER: ConfiguredRaftEngine, Api: APIVersion>(config: TiKvConfig, engine_store_server_helper: isize) {
-    let mut tikv = rawserver::TiKVServer::<CER>::init(config);
+fn run_impl<CER: ConfiguredRaftEngine, Api: APIVersion>(config: TiKvConfig, proxy_config: ProxyConfig, engine_store_server_helper: isize) {
+    let mut tikv = rawserver::TiKVServer::<CER>::init(config, proxy_config);
 
     // Must be called after `TiKVServer::init`.
     let memory_limit = tikv.config.memory_usage_limit.unwrap().0;
@@ -190,7 +191,7 @@ fn run_impl<CER: ConfiguredRaftEngine, Api: APIVersion>(config: TiKvConfig, engi
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
 /// case the server will be properly stopped.
-pub fn run_tikv(config: TiKvConfig, engine_store_server_helper: isize) {
+pub fn run_tikv(config: TiKvConfig, proxy_config: ProxyConfig, engine_store_server_helper: isize) {
     // Sets the global logger ASAP.
     // It is okay to use the config w/o `validate()`,
     // because `initial_logger()` handles various conditions.
@@ -211,9 +212,9 @@ pub fn run_tikv(config: TiKvConfig, engine_store_server_helper: isize) {
 
     dispatch_api_version!(config.storage.api_version(), {
         if !config.raft_engine.enable {
-            run_impl::<engine_rocks::RocksEngine, API>(config, engine_store_server_helper)
+            run_impl::<engine_rocks::RocksEngine, API>(config, proxy_config, engine_store_server_helper)
         } else {
-            run_impl::<RaftLogEngine, API>(config, engine_store_server_helper)
+            run_impl::<RaftLogEngine, API>(config, proxy_config, engine_store_server_helper)
         }
     })
 }
