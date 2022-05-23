@@ -27,8 +27,8 @@ fn test_config() {
     let text = "memory-usage-high-water=0.65\nsnap-handle-pool-size=4\n[nosense]\nfoo=2\n[rocksdb]\nmax-open-files = 111";
     write!(file, "{}", text);
     let path = file.path();
-    let mut unrecognized_keys = Vec::new();
 
+    let mut unrecognized_keys = Vec::new();
     let mut config = TiKvConfig::from_file(
         path,
         Some(&mut unrecognized_keys)
@@ -45,10 +45,22 @@ fn test_config() {
     // Need ENGINE_LABEL_VALUE=tiflash, otherwise will fatal exit.
     server::setup::validate_and_persist_config(&mut config, true);
 
-    let proxy_config2 = engine_store_ffi::config::ProxyConfig::from_file(
+    // Will not override ProxyConfig
+    let proxy_config_new = engine_store_ffi::config::ProxyConfig::from_file(
         path,
     ).unwrap();
-    assert_eq!(proxy_config2.snap_handle_pool_size, 4);
+    assert_eq!(proxy_config_new.snap_handle_pool_size, 4);
+}
+
+#[test]
+fn test_store_setup() {
+    let pd_client = Arc::new(TestPdClient::new(0, false));
+    let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
+    let mut cluster = mock_engine_store::mock_cluster::Cluster::new(0, 3, sim, pd_client);
+
+    // Try to start this node, return after persisted some keys.
+    let _ = cluster.start();
+
 }
 
 #[test]

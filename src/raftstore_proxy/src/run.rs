@@ -29,6 +29,19 @@ use std::time::Duration;
 use std::sync::atomic::AtomicU8;
 use engine_store_ffi::config::ProxyConfig;
 
+pub fn address_proxy_config(config: &mut TiKvConfig) {
+    // We must add engine label to our TiFlash config
+    pub const DEFAULT_ENGINE_LABEL_KEY: &str = "engine";
+    let engine_name = match option_env!("ENGINE_LABEL_VALUE") {
+        None => {
+            fatal!("should set engine name with env variable `ENGINE_LABEL_VALUE`");
+        }
+        Some(name) => name.to_owned(),
+    };
+    config.server.labels
+        .insert(DEFAULT_ENGINE_LABEL_KEY.to_owned(), engine_name);
+}
+
 pub fn init_tiflash_engines<CER: ConfiguredRaftEngine>(
     tikv: &mut rawserver::TiKVServer<CER>,
     flow_listener: engine_rocks::FlowListener,
