@@ -958,19 +958,22 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
 
         // Debug service.
-        // let debug_service = DebugService::new(
-        //     engines.engines.clone(),
-        //     servers.server.get_debug_thread_pool().clone(),
-        //     self.router.clone(),
-        //     self.cfg_controller.as_ref().unwrap().clone(),
-        // );
-        // if servers
-        //     .server
-        //     .register_service(create_debug(debug_service))
-        //     .is_some()
-        // {
-        //     fatal!("failed to register debug service");
-        // }
+        let debug_service = DebugService::new(
+            Engines {
+                kv: engines.engines.kv.rocks.clone(),
+                raft: engines.engines.raft.clone(),
+            },
+            servers.server.get_debug_thread_pool().clone(),
+            self.router.clone(),
+            self.cfg_controller.as_ref().unwrap().clone(),
+        );
+        if servers
+            .server
+            .register_service(create_debug(debug_service))
+            .is_some()
+        {
+            fatal!("failed to register debug service");
+        }
 
         // Create Diagnostics service
         let diag_service = DiagnosticsService::new(
