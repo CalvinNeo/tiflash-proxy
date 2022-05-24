@@ -257,7 +257,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     /// - If the max open file descriptor limit is not high enough to support
     ///   the main database and the raft database.
     fn init_config(mut config: TiKvConfig) -> ConfigController {
-        crate::run::address_proxy_config(&mut config);
+        engine_store_ffi::config::address_proxy_config(&mut config);
         validate_and_persist_config(&mut config, true);
 
         ensure_dir_exist(&config.storage.data_dir).unwrap();

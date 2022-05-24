@@ -21,6 +21,7 @@ use kvproto::raft_serverpb::{RegionLocalState, RaftApplyState, StoreIdent};
 use std::io::{self, Write, Read};
 use tikv::config::TiKvConfig;
 use engine_store_ffi::config::ensure_no_common_unrecognized_keys;
+use pd_client::PdClient;
 
 #[test]
 fn test_config() {
@@ -61,19 +62,23 @@ fn test_config() {
         None
     ).unwrap();
     assert_eq!(proxy_config_new.snap_handle_pool_size, 4);
-
-
 }
 
 #[test]
 fn test_store_setup() {
     let pd_client = Arc::new(TestPdClient::new(0, false));
     let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
-    let mut cluster = mock_engine_store::mock_cluster::Cluster::new(0, 3, sim, pd_client);
+    let mut cluster = mock_engine_store::mock_cluster::Cluster::new(0, 3, sim, pd_client.clone());
+
+    // Add label to cluster
+    engine_store_ffi::config::address_proxy_config(&mut cluster.raw.cfg.tikv);
 
     // Try to start this node, return after persisted some keys.
     let _ = cluster.start();
-
+    let store_id = cluster.raw.engines.keys().last().unwrap();
+    let store = pd_client.get_store(*store_id).unwrap();
+    println!("store {:?}", store);
+    assert!(store.get_labels().iter().find(|&x| x.key == "engine" && x.value == "tiflash").is_some());
 }
 
 #[test]

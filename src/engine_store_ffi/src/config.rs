@@ -8,6 +8,9 @@ use std::collections::HashSet;
 use std::iter::FromIterator;
 use itertools::Itertools;
 use std::collections::hash_map::RandomState;
+use tikv::config::TiKvConfig;
+use tikv_util::crit;
+use server::fatal;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
@@ -44,7 +47,6 @@ impl ProxyConfig {
 
 pub fn ensure_no_common_unrecognized_keys(proxy_unrecognized_keys: &Vec<String>, unrecognized_keys: &Vec<String>) -> Result<(), String> {
     // We can't just compute intersection, since `rocksdb.z` equals not `rocksdb`.
-
     let proxy_part = HashSet::<_>::from_iter(proxy_unrecognized_keys.iter());
     let inter = unrecognized_keys.iter().filter(|s| {
         let mut pref: String = String::from("");
@@ -64,4 +66,17 @@ pub fn ensure_no_common_unrecognized_keys(proxy_unrecognized_keys: &Vec<String>,
         return Err(inter.iter().join(", "))
     }
     Ok(())
+}
+
+pub fn address_proxy_config(config: &mut TiKvConfig) {
+    // We must add engine label to our TiFlash config
+    pub const DEFAULT_ENGINE_LABEL_KEY: &str = "engine";
+    let engine_name = match option_env!("ENGINE_LABEL_VALUE") {
+        None => {
+            fatal!("should set engine name with env variable `ENGINE_LABEL_VALUE`");
+        }
+        Some(name) => name.to_owned(),
+    };
+    config.server.labels
+        .insert(DEFAULT_ENGINE_LABEL_KEY.to_owned(), engine_name);
 }
