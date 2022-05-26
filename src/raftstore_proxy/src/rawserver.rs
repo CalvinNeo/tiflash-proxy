@@ -109,6 +109,7 @@ use server::fatal;
 use tikv_util::{crit, info, warn, error, error_unknown, thd_name};
 
 use engine_store_ffi::config::ProxyConfig;
+use engine_store_ffi::gen_engine_store_server_helper;
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
@@ -143,6 +144,7 @@ pub struct TiKVServer<ER: RaftEngine> {
     env: Arc<Environment>,
     background_worker: Worker,
     quota_limiter: Arc<QuotaLimiter>,
+    pub engine_store_server_helper: isize,
 }
 
 pub struct TiKVEngines<EK: KvEngine, ER: RaftEngine> {
@@ -242,6 +244,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             flow_info_sender: None,
             flow_info_receiver: None,
             quota_limiter,
+            engine_store_server_helper: 0,
         }
     }
 
@@ -494,6 +497,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 
     pub fn init_servers<Api: APIVersion>(&mut self, engine_store_server_helper: isize) -> Arc<VersionTrack<ServerConfig>> {
+        self.engine_store_server_helper = engine_store_server_helper;
         let flow_controller = Arc::new(FlowController::new(
             &self.config.storage.flow_control,
             self.engines.as_ref().unwrap().engine.kv_engine(),
@@ -1206,6 +1210,8 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     pub fn run_status_server(&mut self) {
         // Create a status server.
         let status_enabled = !self.config.server.status_addr.is_empty();
+        let handler = engine_store_ffi::status_server::TiFlashEngineStatus::new(
+            gen_engine_store_server_helper(self.engine_store_server_helper));
         if status_enabled {
             let mut status_server = match StatusServer::new(
                 self.config.server.status_thread_pool_size,
@@ -1220,6 +1226,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                     return;
                 }
             };
+            status_server.engine_status_handler = Some(Arc::from(handler));
             // Start the status server.
             if let Err(e) = status_server.start(self.config.server.status_addr.clone()) {
                 error_unknown!(%e; "failed to bind addr for status service");

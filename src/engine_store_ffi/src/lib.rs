@@ -5,6 +5,7 @@ pub mod utils;
 pub mod lock_cf_reader;
 pub mod observer;
 pub mod config;
+pub mod status_server;
 
 use encryption::DataKeyManager;
 use engine_rocks::encryption::get_env;
