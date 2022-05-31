@@ -671,7 +671,7 @@ pub fn name_to_cf(cf: &str) -> ColumnFamilyType {
     unreachable!()
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct WriteCmds {
     keys: Vec<BaseBuffView>,
     vals: Vec<BaseBuffView>,

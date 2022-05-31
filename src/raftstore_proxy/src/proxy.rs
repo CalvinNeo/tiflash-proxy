@@ -272,19 +272,34 @@ pub unsafe fn run_proxy(
     if let Some(engine_store_git_hash) = matches.value_of("engine-git-hash") {
         config.server.git_hash = engine_store_git_hash.to_owned();
     }
-    // Move addr/advertise_addr to peer_addr
+
+    // // Move addr/advertise_addr to peer_addr
+    // if config.server.advertise_addr.is_empty() {
+    //     config.server.peer_addr = config.server.addr.clone();
+    // } else {
+    //     config.server.peer_addr = config.server.advertise_addr.clone();
+    // }
+    //
+    // if let Some(engine_addr) = matches.value_of("engine-addr") {
+    //     config.server.addr = engine_addr.to_owned();
+    // }
+    // if let Some(engine_addr) = matches.value_of("advertise-engine-addr") {
+    //     config.server.addr = engine_addr.to_owned();
+    // }
+
     if config.server.advertise_addr.is_empty() {
-        config.server.peer_addr = config.server.addr.clone();
+        config.server.addr = config.server.addr.clone();
     } else {
-        config.server.peer_addr = config.server.advertise_addr.clone();
+        config.server.addr = config.server.advertise_addr.clone();
     }
 
     if let Some(engine_addr) = matches.value_of("engine-addr") {
-        config.server.addr = engine_addr.to_owned();
+        config.server.peer_addr = engine_addr.to_owned();
     }
     if let Some(engine_addr) = matches.value_of("advertise-engine-addr") {
-        config.server.addr = engine_addr.to_owned();
+        config.server.peer_addr = engine_addr.to_owned();
     }
+
     config.server.advertise_addr = "".to_string();
 
     config.logger_compatible_adjust();

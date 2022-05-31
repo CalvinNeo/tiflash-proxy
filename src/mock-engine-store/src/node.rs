@@ -152,6 +152,7 @@ pub struct NodeCluster {
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
     #[allow(clippy::type_complexity)]
     post_create_coprocessor_host: Option<Box<dyn Fn(u64, &mut CoprocessorHost<engine_tiflash::RocksEngine>)>>,
+    pub importer: Option<Arc<SSTImporter>>,
 }
 
 impl NodeCluster {
@@ -165,6 +166,7 @@ impl NodeCluster {
             simulate_trans: HashMap::default(),
             concurrency_managers: HashMap::default(),
             post_create_coprocessor_host: None,
+            importer: None,
         }
     }
 }
@@ -264,6 +266,12 @@ impl Simulator<engine_tiflash::RocksEngine> for NodeCluster {
 
         self.snap_mgrs.insert(node_id, snap_mgr.clone());
 
+        let importer = {
+            let dir = Path::new(engines.kv.path()).join("import-sst");
+            Arc::new(SSTImporter::new(&cfg.import, dir, None, cfg.storage.api_version()).unwrap())
+        };
+        self.importer = Some(importer.clone());
+
         // Create coprocessor.
         let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
 
@@ -271,14 +279,17 @@ impl Simulator<engine_tiflash::RocksEngine> for NodeCluster {
             f(node_id, &mut coprocessor_host);
         }
 
+        assert_ne!(engines.kv.engine_store_server_helper, 0);
+        let tiflash_ob = engine_store_ffi::observer::TiFlashObserver::new(
+            engines.kv.clone(),
+            importer.clone(),
+            2,
+        );
+        tiflash_ob.register_to(&mut coprocessor_host);
+
         let cm = ConcurrencyManager::new(1.into());
         self.concurrency_managers.insert(node_id, cm.clone());
         ReplicaReadLockChecker::new(cm.clone()).register(&mut coprocessor_host);
-
-        let importer = {
-            let dir = Path::new(engines.kv.path()).join("import-sst");
-            Arc::new(SSTImporter::new(&cfg.import, dir, None, cfg.storage.api_version()).unwrap())
-        };
 
         let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
         let cfg_controller = ConfigController::new(cfg.tikv.clone());

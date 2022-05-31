@@ -1,28 +1,59 @@
-use raftstore::coprocessor::Cmd;
+use raftstore::coprocessor::{Cmd, ApplySnapshotObserver, BoxApplySnapshotObserver};
 use raftstore::coprocessor::{Coprocessor, AdminObserver, QueryObserver, ObserverContext, RegionChangeObserver,
                              BoxQueryObserver, BoxAdminObserver, CoprocessorHost, BoxRegionChangeObserver,
                              RegionChangeEvent, RegionState};
-use crate::{WriteCmdType, RaftCmdHeader};
+use crate::{WriteCmdType, RaftCmdHeader, ColumnFamilyType};
 use crate::interfaces::root::DB::EngineStoreApplyRes;
 use kvproto::raft_serverpb::RaftApplyState;
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
     RaftCmdRequest, RaftCmdResponse, Request,
 };
+use kvproto::metapb::Region;
 use engine_traits::{Peekable, SyncMutable};
 use raft::{eraftpb, StateRole};
 use tikv_util::{info, error, warn};
 use sst_importer::SSTImporter;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, mpsc};
 use yatp::pool::{Builder, ThreadPool};
 use yatp::task::future::TaskCell;
+use std::collections::HashMap;
+use raftstore::store::SnapKey;
+use std::cell::RefCell;
+use std::sync::atomic::AtomicUsize;
+use std::path::PathBuf;
+
+pub struct PtrWrapper(crate::RawCppPtr);
+
+unsafe impl Send for PtrWrapper {}
+unsafe impl Sync for PtrWrapper {}
+
+#[derive(Default)]
+pub struct PrehandleContext {
+    // tracer holds ptr of snapshot prehandled by TiFlash side.
+    pub tracer: HashMap<SnapKey, Arc<Mutex<PrehandleTask>>>,
+}
+
+pub struct PrehandleTask {
+    pub recv: mpsc::Receiver<Option<PtrWrapper>>,
+}
+
+impl PrehandleTask {
+    fn new(recv: mpsc::Receiver<Option<PtrWrapper>>) -> Self {
+        PrehandleTask {
+            recv,
+        }
+    }
+}
 
 pub struct TiFlashObserver {
     pub engine_store_server_helper: &'static crate::EngineStoreServerHelper,
     pub engine: engine_tiflash::RocksEngine,
     pub sst_importer: Arc<SSTImporter>,
     pub apply_snap_pool: Arc<ThreadPool<TaskCell>>,
+    pub pre_handle_snapshot_ctx: Arc<Mutex<RefCell<PrehandleContext>>>,
 }
+
 
 impl Clone for TiFlashObserver {
     fn clone(&self) -> Self {
@@ -31,6 +62,7 @@ impl Clone for TiFlashObserver {
             engine: self.engine.clone(),
             sst_importer: self.sst_importer.clone(),
             apply_snap_pool: self.apply_snap_pool.clone(),
+            pre_handle_snapshot_ctx: self.pre_handle_snapshot_ctx.clone(),
         }
     }
 }
@@ -39,19 +71,20 @@ impl Clone for TiFlashObserver {
 const TIFLASH_OBSERVER_PRIORITY: u32 = 0;
 
 impl TiFlashObserver {
-    pub fn new(engine_store_server_helper: &'static crate::EngineStoreServerHelper,
-               engine: engine_tiflash::RocksEngine,
+    pub fn new(engine: engine_tiflash::RocksEngine,
                sst_importer: Arc<SSTImporter>,
                snap_handle_pool_size: usize,
     ) -> Self {
         let snap_pool = Builder::new(tikv_util::thd_name!("region-task"))
             .max_thread_count(snap_handle_pool_size)
             .build_future_pool();
+        let engine_store_server_helper = crate::gen_engine_store_server_helper(engine.engine_store_server_helper);
         TiFlashObserver {
             engine_store_server_helper,
             engine,
             sst_importer,
             apply_snap_pool: Arc::new(snap_pool),
+            pre_handle_snapshot_ctx: Arc::new(Mutex::new(RefCell::new(PrehandleContext::default()))),
         }
     }
 
@@ -63,6 +96,10 @@ impl TiFlashObserver {
         coprocessor_host.registry.register_admin_observer(
             TIFLASH_OBSERVER_PRIORITY,
             BoxAdminObserver::new(self.clone()),
+        );
+        coprocessor_host.registry.register_apply_snapshot_observer(
+            TIFLASH_OBSERVER_PRIORITY,
+            BoxApplySnapshotObserver::new(self.clone()),
         );
     }
 
@@ -127,6 +164,7 @@ impl QueryObserver for TiFlashObserver {
         apply_state: &RaftApplyState,
         region_state: &RegionState,
     ) {
+        fail::fail_point!("on_address_apply_result_normal", |_| { } );
         const NONE_STR: &str = "";
         let requests = cmd.request.get_requests();
 
@@ -196,6 +234,7 @@ impl QueryObserver for TiFlashObserver {
             };
         } else {
             let flash_res = {
+                info!("!!!! write haha {} {} {:?}", cmd.index, cmd.term, cmds);
                 self.engine_store_server_helper.handle_write_raft_cmd(
                     &cmds,
                     RaftCmdHeader::new(ob_ctx.region().get_id(), cmd.index, cmd.term),
@@ -203,6 +242,7 @@ impl QueryObserver for TiFlashObserver {
             };
             let persisted = match flash_res {
                 EngineStoreApplyRes::None => {
+                    info!("!!!! write None {} {}", cmd.index, cmd.term);
                     false
                 },
                 EngineStoreApplyRes::Persist => {
@@ -231,6 +271,7 @@ impl AdminObserver for TiFlashObserver {
         apply_state: &RaftApplyState,
         region_state: &RegionState,
     ) {
+        fail::fail_point!("on_address_apply_result_admin", |_| { } );
         let request = cmd.request.get_admin_request();
         let response = cmd.response.get_admin_response();
         let cmd_type = request.get_cmd_type();
@@ -301,3 +342,82 @@ impl AdminObserver for TiFlashObserver {
     }
 }
 
+impl TiFlashObserver {
+    fn pre_handle_snapshot_impl(&self, region: &Region, peer_id: u64, snap_key: &SnapKey, sst_views: Vec<(PathBuf, ColumnFamilyType)>) {
+        let (sender, receiver) = mpsc::channel();
+        let idx = snap_key.idx;
+        let term = snap_key.term;
+        let engine_store_server_helper = self.engine_store_server_helper;
+        let r = region.clone();
+        let v = sst_views.clone();
+        self.apply_snap_pool.spawn(async move {
+            let views = sst_views.iter().map(|(b, c)| {
+                (b.to_str().unwrap().as_bytes(), c.clone())
+            }).collect();
+            let s = engine_store_server_helper
+                .pre_handle_snapshot(&r, peer_id, views, idx, term);
+            sender.send(Some(PtrWrapper(s)));
+        });
+
+        let e = Arc::new(Mutex::new(PrehandleTask::new(receiver)));
+        self.pre_handle_snapshot_ctx.lock().unwrap().borrow_mut().tracer.insert(snap_key.clone(), e.clone());
+    }
+}
+
+impl ApplySnapshotObserver for TiFlashObserver {
+    fn pre_handle_snapshot(&self, ob_ctx: &mut ObserverContext<'_>,
+                           peer_id: u64, snap_key: &SnapKey, ssts: &[raftstore::store::snap::CfFile]) {
+
+        info!("!!!!! pre_handle_snapshot");
+        let mut sst_views = vec![];
+        for cf_file in ssts {
+            if cf_file.size == 0 {
+                // Skip empty cf file.
+                continue;
+            }
+
+            // if plain_file_used(cf_file.cf) {
+            //     assert!(cf_file.cf == CF_LOCK);
+            // }
+
+            sst_views.push((
+                cf_file.path.clone(),
+                crate::name_to_cf(cf_file.cf),
+            ));
+        }
+
+        self.pre_handle_snapshot_impl(ob_ctx.region(), peer_id, snap_key, sst_views);
+    }
+
+    fn post_apply_snapshot(&self, _: &mut ObserverContext<'_>, snap_key: &raftstore::store::SnapKey) {
+        info!("!!!!! post_apply_snapshot");
+        let ctx = self.pre_handle_snapshot_ctx.lock().unwrap();
+        let b = ctx.borrow_mut();
+        match b.tracer.get(snap_key) {
+            Some(t) => {
+                let retry = match t.lock().unwrap().recv.recv() {
+                    Ok(snap_ptr) => {
+                        match snap_ptr {
+                            Some(s) => {
+                                info!("get snapshot success");
+                                self.engine_store_server_helper
+                                    .apply_pre_handled_snapshot(s.0);
+                                false
+                            },
+                            None => true,
+                        }
+                    }
+                    Err(_) => {
+                        true
+                    }
+                };
+                if retry {
+                    panic!("get prehandled snapshot failed")
+                }
+            },
+            None => {
+                panic!("Can not get snapshot of {:?}", snap_key);
+            }
+        }
+    }
+}

@@ -30,6 +30,8 @@ use tikv_util::crit;
 
 use file_system::IORateLimiter;
 use tempfile::TempDir;
+use std::borrow::BorrowMut;
+use std::cell::RefCell;
 
 // mock cluster
 
@@ -49,7 +51,7 @@ pub struct EngineHelperSet {
 
 pub struct Cluster<T: Simulator<engine_tiflash::RocksEngine>> {
     pub raw: test_raftstore::Cluster<T, engine_tiflash::RocksEngine>,
-    pub ffi_helper_set: HashMap<u64, FFIHelperSet>,
+    pub ffi_helper_set: Arc<Mutex<RefCell<HashMap<u64, FFIHelperSet>>>>,
 }
 
 impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
@@ -60,13 +62,14 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
         pd_client: Arc<TestPdClient>,
     ) -> Cluster<T> {
         // Force sync to enable Leader run as a Leader, rather than proxy
+        test_util::init_log_for_test();
         fail::cfg("apply_on_handle_snapshot_sync", "return").unwrap();
 
         let mut cls = test_raftstore::Cluster::new(id, count, sim, pd_client,
 create_tiflash_test_engine, |r: &engine_tiflash::RocksEngine| Arc::clone(r.rocks.as_inner()));
         Cluster {
             raw: cls,
-            ffi_helper_set: HashMap::default(),
+            ffi_helper_set: Arc::new(Mutex::new(RefCell::new(HashMap::default()))),
         }
     }
 
@@ -104,6 +107,7 @@ create_tiflash_test_engine, |r: &engine_tiflash::RocksEngine| Arc::clone(r.rocks
             ));
 
         let helper_sz = &*engine_store_server_helper as *const _ as isize;
+        proxy.kv_engine.write().unwrap().as_mut().unwrap().engine_store_server_helper = helper_sz;
         let ffi_helper_set = FFIHelperSet {
             proxy,
             proxy_helper,
@@ -131,6 +135,25 @@ create_tiflash_test_engine, |r: &engine_tiflash::RocksEngine| Arc::clone(r.rocks
         )
     }
 
+    pub fn create_engine(&mut self, router: Option<RaftRouter<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>>)
+        -> FFIHelperSet {
+        let (mut engines, key_manager, dir) =
+            create_tiflash_test_engine(router.clone(), self.raw.io_rate_limiter.clone(), &self.raw.cfg);
+
+        let (mut ffi_helper_set, mut node_cfg) =
+            self.make_ffi_helper_set(0, engines.clone(), &key_manager, router.as_ref().unwrap());
+
+        engines.kv.engine_store_server_helper = ffi_helper_set.proxy.kv_engine.write().unwrap().as_mut().unwrap().engine_store_server_helper;
+        assert_ne!(engines.kv.engine_store_server_helper, 0);
+
+        // replace self.raw.create_engine
+        self.raw.dbs.push(engines.clone());
+        self.raw.key_managers.push(key_manager.clone());
+        self.raw.paths.push(dir);
+
+        ffi_helper_set
+    }
+
     pub fn start(&mut self) -> ServerResult<()> {
         init_global_ffi_helper_set();
 
@@ -143,22 +166,14 @@ create_tiflash_test_engine, |r: &engine_tiflash::RocksEngine| Arc::clone(r.rocks
         // Try start new nodes.
         for _ in 0..self.raw.count - self.raw.engines.len() {
             let (router, system) = create_raft_batch_system(&self.raw.cfg.raft_store);
-
-            // replace self.raw.create_engine
-            let (engines, key_manager, dir) =
-                create_tiflash_test_engine(Some(router.clone()), self.raw.io_rate_limiter.clone(), &self.raw.cfg);
-
-            self.raw.dbs.push(engines.clone());
-            self.raw.key_managers.push(key_manager.clone());
-            self.raw.paths.push(dir);
+            let mut ffi_helper_set = self.create_engine(Some(router.clone()));
 
             let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
-
             let props = GroupProperties::default();
             tikv_util::thread_group::set_properties(Some(props.clone()));
 
-            let (mut ffi_helper_set, mut node_cfg) =
-                self.make_ffi_helper_set(0, engines.clone(), &key_manager, &router);
+            let engines = self.raw.dbs.last().unwrap().clone();
+            let key_manager = self.raw.key_managers.last().unwrap().clone();
 
             let mut sim = self.raw.sim.wl();
             let node_id = sim.run_node(
@@ -172,11 +187,11 @@ create_tiflash_test_engine, |r: &engine_tiflash::RocksEngine| Arc::clone(r.rocks
             )?;
             debug!("start new node {}", node_id);
             self.raw.group_props.insert(node_id, props);
-            self.raw.engines.insert(node_id, engines);
+            self.raw.engines.insert(node_id, engines.clone());
             self.raw.store_metas.insert(node_id, store_meta);
             self.raw.key_managers_map.insert(node_id, key_manager.clone());
             ffi_helper_set.engine_store_server.id = node_id;
-            self.ffi_helper_set.insert(node_id, ffi_helper_set);
+            self.ffi_helper_set.lock().unwrap().get_mut().insert(node_id, ffi_helper_set);
         }
         Ok(())
     }

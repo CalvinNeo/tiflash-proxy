@@ -49,6 +49,15 @@ resource_metering = { path = "../../contrib/tikv/components/resource_metering" }
 crossbeam = "0.8"
 rand = "0.8"
 
+futures = "0.3"
+tokio = { version = "1.5", features = ["rt-multi-thread"]}
+grpcio = { version = "0.10",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
+pd_client = { path = "../../contrib/tikv/components/pd_client", default-features = false }
+txn_types = { path = "../../contrib/tikv/components/txn_types", default-features = false }
+resolved_ts = { path = "../../contrib/tikv/components/resolved_ts" }
+security = { path = "../../contrib/tikv/components/security", default-features = false }
+api_version = { path = "../../contrib/tikv/components/api_version" }
+
 [dependencies.rocksdb]
 git = "https://github.com/tikv/rust-rocksdb.git"
 package = "rocksdb"

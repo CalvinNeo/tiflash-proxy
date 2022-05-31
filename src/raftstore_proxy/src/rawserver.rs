@@ -735,6 +735,10 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.state.clone(),
             self.background_worker.clone(),
         );
+        // !!!!! a hack to set metapb::Store
+        node.store.set_peer_address(self.config.server.addr.clone());
+        node.store.set_address(self.config.server.peer_addr.clone());
+
         node.try_bootstrap_store(engines.engines.clone())
             .unwrap_or_else(|e| fatal!("failed to bootstrap node id: {}", e));
         {
@@ -803,7 +807,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         // Register TiFlash observer
         let snap_handle_pool_size = self.proxy_config.snap_handle_pool_size;
         let tiflash_ob = engine_store_ffi::observer::TiFlashObserver::new(
-            engine_store_ffi::gen_engine_store_server_helper(engine_store_server_helper),
             self.engines.as_ref().unwrap().engines.kv.clone(),
             importer.clone(),
             snap_handle_pool_size,

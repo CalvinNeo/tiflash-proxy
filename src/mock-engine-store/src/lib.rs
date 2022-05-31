@@ -20,6 +20,7 @@ use tikv::server::{Node, Result as ServerResult};
 
 pub mod mock_cluster;
 pub mod node;
+pub mod server;
 pub mod transport_simulate;
 
 type RegionId = u64;
@@ -27,7 +28,7 @@ type RegionId = u64;
 pub struct Region {
     region: kvproto::metapb::Region,
     peer: kvproto::metapb::Peer,
-    data: [BTreeMap<Vec<u8>, Vec<u8>>; 3],
+    pub data: [BTreeMap<Vec<u8>, Vec<u8>>; 3],
     apply_state: kvproto::raft_serverpb::RaftApplyState,
 }
 
@@ -111,29 +112,32 @@ impl EngineStoreServerWrap {
                 let val = &*cmds.vals.add(i as _);
                 let k = &key.to_slice();
                 let v = &val.to_slice();
-                debug!(
-                    "handle_write_raft_cmd add K {:?} V {:?} to region {} node id {}",
-                    &k[..std::cmp::min(4usize, k.len())],
-                    &v[..std::cmp::min(4usize, v.len())],
-                    region_id,
-                    server.id
-                );
                 let tp = &*cmds.cmd_types.add(i as _);
                 let cf = &*cmds.cmd_cf.add(i as _);
                 let cf_index = (*cf) as u8;
+                debug!(
+                    "handle_write_raft_cmd add K {:?} V {:?} to region {} node id {} cf {}",
+                    &k[..std::cmp::min(4usize, k.len())],
+                    &v[..std::cmp::min(4usize, v.len())],
+                    region_id,
+                    server.id,
+                    cf_index,
+                );
                 let data = &mut region.data[cf_index as usize];
                 match tp {
                     engine_store_ffi::WriteCmdType::Put => {
                         let tikv_key = keys::data_key(key.to_slice());
-                        kv.put_cf(
+                        kv.rocks.put_cf(
                             cf_to_name(cf.to_owned().into()),
                             &tikv_key,
                             &val.to_slice().to_vec(),
                         );
+                        data.insert(k.to_vec(), v.to_vec());
                     }
                     engine_store_ffi::WriteCmdType::Del => {
                         let tikv_key = keys::data_key(key.to_slice());
-                        kv.delete_cf(cf_to_name(cf.to_owned().into()), &tikv_key);
+                        kv.rocks.delete_cf(cf_to_name(cf.to_owned().into()), &tikv_key);
+                        data.remove(&k.to_vec());
                     }
                 }
             }
