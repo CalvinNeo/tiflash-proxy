@@ -24,6 +24,7 @@ use raftstore::{DiscardReason, Error, Result};
 use tikv_util::error;
 use tikv_util::time::ThreadReadId;
 use tikv_util::{Either, HandyRwLock};
+use test_raftstore::FilterFactory;
 
 pub fn check_messages(msgs: &[RaftMessage]) -> Result<()> {
     if msgs.is_empty() {
@@ -257,9 +258,9 @@ impl<C: LocalReadRouter<RocksEngine>> LocalReadRouter<RocksEngine> for SimulateT
     }
 }
 
-pub trait FilterFactory {
-    fn generate(&self, node_id: u64) -> Vec<Box<dyn Filter>>;
-}
+// pub trait FilterFactory {
+//     fn generate(&self, node_id: u64) -> Vec<Box<dyn Filter>>;
+// }
 
 #[derive(Default)]
 pub struct DefaultFilterFactory<F: Filter + Default>(PhantomData<F>);

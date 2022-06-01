@@ -1,7 +1,7 @@
 #![feature(slice_take)]
 
 use encryption::DataKeyManager;
-use engine_store_ffi::interfaces::root::DB as ffi_interfaces;
+pub use engine_store_ffi::interfaces::root::DB as ffi_interfaces;
 use engine_store_ffi::{
     EngineStoreServerHelper, RaftStoreProxyFFIHelper, RawCppPtr, UnwrapExternCFunc,
 };
@@ -19,6 +19,8 @@ use test_raftstore::{Simulator, TestPdClient};
 use tikv::config::TiKvConfig;
 use tikv::server::{Node, Result as ServerResult};
 use tikv_util::{debug, info, warn};
+use kvproto::raft_cmdpb::AdminCmdType;
+use collections::HashSet;
 
 pub mod mock_cluster;
 pub mod node;
@@ -32,6 +34,10 @@ pub struct Region {
     peer: kvproto::metapb::Peer,
     // im-memory data
     pub data: [BTreeMap<Vec<u8>, Vec<u8>>; 3],
+    // If we a key is deleted, it will immediately be removed from data,
+    // We will record the key in pending_delete, so we can delete it from disk when flushing.
+    pub pending_delete: [HashSet<Vec<u8>>; 3],
+    pub pending_write: [BTreeMap<Vec<u8>, Vec<u8>>; 3],
     apply_state: kvproto::raft_serverpb::RaftApplyState,
 }
 
@@ -51,6 +57,15 @@ impl EngineStoreServer {
             engines,
             kvstore: Default::default(),
         }
+    }
+
+    pub fn get_mem(&self, region_id: u64, cf: ffi_interfaces::ColumnFamilyType, key: &Vec<u8>) -> Option<&Vec<u8>> {
+        let region = self.kvstore.get(&region_id).unwrap();
+        let bmap = &region.data[cf as usize];
+        for (k, v) in bmap.iter() {
+            debug!("!!!! get mem {:?}", k);
+        }
+        bmap.get(key)
     }
 }
 
@@ -82,20 +97,68 @@ impl EngineStoreServerWrap {
     ) -> ffi_interfaces::EngineStoreApplyRes {
         let region_id = header.region_id;
         info!("handle admin raft cmd"; "request"=>?req, "response"=>?resp, "index"=>header.index, "region-id"=>header.region_id);
-        let do_handle_admin_raft_cmd = move |region: &mut Region| {
+        let do_handle_admin_raft_cmd = move |region: &mut Box<Region>| {
             if region.apply_state.get_applied_index() >= header.index {
                 return ffi_interfaces::EngineStoreApplyRes::Persist;
             }
-
-            ffi_interfaces::EngineStoreApplyRes::Persist
+            match req.get_cmd_type() {
+                AdminCmdType::CompactLog => {
+                    fail::fail_point!("on_handle_admin_raft_cmd_no_persist", |_| {
+                        info!("!!!!! HAVE NONE");
+                        ffi_interfaces::EngineStoreApplyRes::None
+                    });
+                    info!("!!!!! HAVE PERSIST");
+                    ffi_interfaces::EngineStoreApplyRes::Persist
+                },
+                _ => {
+                    ffi_interfaces::EngineStoreApplyRes::Persist
+                },
+            }
         };
-        match (*self.engine_store_server).kvstore.entry(region_id) {
+        let res = match (*self.engine_store_server).kvstore.entry(region_id) {
             std::collections::hash_map::Entry::Occupied(mut o) => {
                 do_handle_admin_raft_cmd(o.get_mut())
             }
             std::collections::hash_map::Entry::Vacant(v) => {
+                // Currently, we don't handle commands like BatchSplit,
+                // so it is normal if we find no region.
                 warn!("region {} not found", region_id);
                 do_handle_admin_raft_cmd(v.insert(Default::default()))
+            }
+        };
+
+        info!("!!!!! IS {:?}", res);
+        // We must have this region now.
+        let region = (*self.engine_store_server).kvstore.get_mut(&region_id).unwrap();
+        match res {
+            ffi_interfaces::EngineStoreApplyRes::Persist => {
+                Self::write_to_db_data(&mut (*self.engine_store_server), region);
+            }
+            _ => (),
+        };
+        res
+    }
+
+    unsafe fn write_to_db_data(store: &mut EngineStoreServer, region: &mut Box<Region>) {
+        info!("mock flush to engine");
+        let kv = &mut store.engines.as_mut().unwrap().kv;
+        for cf in 0..3 {
+            let pending_write = std::mem::take(region.pending_write.as_mut().get_mut(cf).unwrap());
+            let mut pending_remove = std::mem::take(region.pending_delete.as_mut().get_mut(cf).unwrap());
+            for (k, v) in pending_write.into_iter() {
+                let tikv_key = keys::data_key(k.as_slice());
+                let cf_name = cf_to_name(cf.into());
+                if !pending_remove.contains(&k) {
+                    kv.rocks.put_cf(cf_name, &tikv_key, &v);
+                } else {
+                    pending_remove.remove(&k);
+                    debug!("key is later deleted {:?} in region {:?}", &k, region.region);
+                }
+            }
+            let cf_name = cf_to_name(cf.into());
+            for k in pending_remove.into_iter() {
+                let tikv_key = keys::data_key(k.as_slice());
+                kv.rocks.delete_cf(cf_name, &tikv_key);
             }
         }
     }
@@ -109,7 +172,7 @@ impl EngineStoreServerWrap {
         let server = &mut (*self.engine_store_server);
         let kv = &mut (*self.engine_store_server).engines.as_mut().unwrap().kv;
 
-        let do_handle_write_raft_cmd = move |region: &mut Region| {
+        let do_handle_write_raft_cmd = move |region: &mut Box<Region>| {
             if region.apply_state.get_applied_index() >= header.index {
                 return ffi_interfaces::EngineStoreApplyRes::None;
             }
@@ -129,22 +192,12 @@ impl EngineStoreServerWrap {
                     server.id,
                     cf_index,
                 );
-                let data = &mut region.data[cf_index as usize];
                 match tp {
                     engine_store_ffi::WriteCmdType::Put => {
-                        let tikv_key = keys::data_key(key.to_slice());
-                        kv.rocks.put_cf(
-                            cf_to_name(cf.to_owned().into()),
-                            &tikv_key,
-                            &val.to_slice().to_vec(),
-                        );
-                        data.insert(k.to_vec(), v.to_vec());
+                        write_kv_in_mem(region, cf_index as usize, k, v);
                     }
                     engine_store_ffi::WriteCmdType::Del => {
-                        let tikv_key = keys::data_key(key.to_slice());
-                        kv.rocks
-                            .delete_cf(cf_to_name(cf.to_owned().into()), &tikv_key);
-                        data.remove(&k.to_vec());
+                        delete_kv_in_mem(region, cf_index as usize, k);
                     }
                 }
             }
@@ -463,6 +516,23 @@ struct PrehandledSnapshot {
     pub region: std::option::Option<Region>,
 }
 
+fn write_kv_in_mem(region: &mut Box<Region>, cf_index: usize, k: &[u8], v: &[u8]) {
+    tikv_util::debug!("!!!! write_kv_in_mem {:?} {:?}", &k, &v);
+    let data = &mut region.data[cf_index];
+    let pending_delete = &mut region.pending_delete[cf_index];
+    let pending_write = &mut region.pending_write[cf_index];
+    pending_delete.remove(k);
+    data.insert(k.to_vec(), v.to_vec());
+    pending_write.insert(k.to_vec(), v.to_vec());
+}
+
+fn delete_kv_in_mem(region: &mut Box<Region>, cf_index: usize, k: &[u8]) {
+    let data = &mut region.data[cf_index];
+    let pending_delete = &mut region.pending_delete[cf_index];
+    pending_delete.insert(k.to_vec());
+    data.remove(k);
+}
+
 unsafe extern "C" fn ffi_pre_handle_snapshot(
     arg1: *mut ffi_interfaces::EngineStoreServerWrap,
     region_buff: ffi_interfaces::BaseBuffView,
@@ -482,12 +552,15 @@ unsafe extern "C" fn ffi_pre_handle_snapshot(
 
     let req_id = req.id;
 
-    let mut region = Region {
+    let mut region = Box::new(
+    Region {
         region: req,
         peer: Default::default(),
         data: Default::default(),
+        pending_delete: Default::default(),
+        pending_write: Default::default(),
         apply_state: Default::default(),
-    };
+    });
 
     debug!("pre handle snaps with len {} peer_id {} region {:?}", snaps.len, peer_id, region.region);
     for i in 0..snaps.len {
@@ -505,17 +578,17 @@ unsafe extern "C" fn ffi_pre_handle_snapshot(
             let key = sst_reader.key();
             let value = sst_reader.value();
 
-            let cf_index = (*snapshot).type_ as u8;
-            let data = &mut region.data[cf_index as usize];
-            let _ = data.insert(key.to_slice().to_vec(), value.to_slice().to_vec());
-
+            let cf = (*snapshot).type_;
+            let cf_index = cf as u8;
+            let cf_name = cf_to_name(cf.into());
+            write_kv_in_mem(&mut region, cf_index as usize, key.to_slice(), value.to_slice());
             sst_reader.next();
         }
     }
 
     ffi_interfaces::RawCppPtr {
         ptr: Box::into_raw(Box::new(PrehandledSnapshot {
-            region: Some(region),
+            region: Some(*region),
         })) as *const Region as ffi_interfaces::RawVoidPtr,
         type_: RawCppPtrTypeImpl::PreHandledSnapshotWithBlock.into(),
     }
@@ -551,15 +624,7 @@ unsafe extern "C" fn ffi_apply_pre_handled_snapshot(
 
     debug!("apply snaps peer_id {} region {:?}", node_id, &region.region);
 
-    let kv = &mut (*store.engine_store_server).engines.as_mut().unwrap().kv;
-    for cf in 0..3 {
-        let cf_data = region.data.as_mut().get_mut(cf).unwrap();
-        for (k, v) in std::mem::take(cf_data).into_iter() {
-            let tikv_key = keys::data_key(k.as_slice());
-            let cf_name = cf_to_name(cf.into());
-            kv.rocks.put_cf(cf_name, &tikv_key, &v);
-        }
-    }
+    EngineStoreServerWrap::write_to_db_data(&mut (*store.engine_store_server), region);
 }
 
 unsafe extern "C" fn ffi_handle_ingest_sst(
@@ -592,6 +657,7 @@ unsafe extern "C" fn ffi_handle_ingest_sst(
 
             let tikv_key = keys::data_key(key.to_slice());
             let cf_name = cf_to_name((*snapshot).type_);
+
             kv.put_cf(cf_name, &tikv_key, &value.to_slice());
             sst_reader.next();
         }

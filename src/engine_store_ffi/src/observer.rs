@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicUsize;
 use std::sync::{mpsc, Arc, Mutex};
-use tikv_util::{error, info, warn};
+use tikv_util::{error, info, warn, debug};
 use yatp::pool::{Builder, ThreadPool};
 use yatp::task::future::TaskCell;
 
@@ -384,7 +384,7 @@ impl ApplySnapshotObserver for TiFlashObserver {
         snap_key: &SnapKey,
         ssts: &[raftstore::store::snap::CfFile],
     ) {
-        info!("!!!!! pre_handle_snapshot");
+        fail::fail_point!("on_ob_pre_handle_snapshot", |_| {});
         let mut sst_views = vec![];
         for cf_file in ssts {
             if cf_file.size == 0 {
@@ -407,7 +407,7 @@ impl ApplySnapshotObserver for TiFlashObserver {
         _: &mut ObserverContext<'_>,
         snap_key: &raftstore::store::SnapKey,
     ) {
-        info!("!!!!! post_apply_snapshot");
+        fail::fail_point!("on_ob_post_apply_snapshot", |_| {});
         let ctx = self.pre_handle_snapshot_ctx.lock().unwrap();
         let b = ctx.borrow_mut();
         match b.tracer.get(snap_key) {

@@ -4,7 +4,7 @@ use engine_store_ffi::{KVGetStatus, RaftStoreProxyFFI};
 use mock_engine_store::node::NodeCluster;
 use mock_engine_store::server::ServerCluster;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, mpsc};
 use test_raftstore::{must_get_equal, must_get_none, new_peer, TestPdClient};
 
 extern crate rocksdb;
@@ -29,6 +29,11 @@ use std::sync::Once;
 use tikv::config::TiKvConfig;
 use tikv_util::config::{LogFormat, ReadableDuration, ReadableSize};
 use tikv_util::HandyRwLock;
+use test_raftstore::Simulator;
+use mock_engine_store::transport_simulate::{CloneFilterFactory, RegionPacketFilter, CollectSnapshotFilter};
+use tikv_util::time::Duration;
+use raft::eraftpb::MessageType;
+use mock_engine_store::transport_simulate::Direction;
 
 #[test]
 fn test_config() {
@@ -100,6 +105,7 @@ fn test_normal() {
 
     fail::cfg("on_address_apply_result_normal", "return").unwrap();
     fail::cfg("on_address_apply_result_admin", "return").unwrap();
+    fail::cfg("on_handle_admin_raft_cmd_no_persist", "return").unwrap();
 
     // Try to start this node, return after persisted some keys.
     let _ = cluster.start();
@@ -147,19 +153,23 @@ fn test_normal() {
         let k = format!("k{}", i);
         let v = format!("v{}", i);
         cluster.raw.must_put(k.as_bytes(), v.as_bytes());
+    }
+
+    for i in 10..20 {
+        let k = format!("k{}", i);
+        let v = format!("v{}", i);
+
         let region_id = cluster.raw.get_region(k.as_bytes()).get_id();
         for id in cluster.raw.engines.keys() {
             let engine = &cluster.raw.get_engine(*id);
-            // We can get nothing, since engine_tiflash filters all data.
-            must_get_equal(engine, k.as_bytes(), v.as_bytes());
-            let mut locked = cluster.ffi_helper_set.lock().unwrap();
-            let mocker = locked.get_mut().get(&id).unwrap();
-            let region = mocker.engine_store_server.kvstore.get(&region_id).unwrap();
-            let bmap = &region.data
-                [engine_store_ffi::interfaces::root::DB::ColumnFamilyType::Default as usize];
-            let ks = k.as_bytes().to_vec();
-            println!("!!!! open H {} ks {:?}", id, ks);
-            assert!(bmap.get(&ks).is_some());
+            // must_get_equal(engine, k.as_bytes(), v.as_bytes());
+            // We can get in mem
+            let mut lock = cluster
+                .ffi_helper_set.lock().unwrap();
+            let v = lock.get_mut().get(id).unwrap()
+                .engine_store_server
+                .get_mem(region_id,mock_engine_store::ffi_interfaces::ColumnFamilyType::Default, &k.as_bytes().to_vec());
+            assert!(v.is_some());
         }
     }
 
@@ -242,6 +252,7 @@ fn test_normal() {
         }
     }
 
+    fail::remove("on_handle_admin_raft_cmd_no_persist");
     cluster.raw.shutdown();
 }
 
@@ -267,12 +278,12 @@ fn test_huge_snapshot() {
     }
     let first_key: &[u8] = b"000";
 
-    let eng_ids = cluster.raw.engines.iter().map(|e| e.0).collect::<Vec<_>>();
-    tikv_util::info!("engine_2 is {}", *eng_ids[1]);
-    let engine_2 = cluster.raw.get_engine(*eng_ids[1]);
+    let eng_ids = cluster.raw.engines.iter().map(|e| e.0.to_owned()).collect::<Vec<_>>();
+    tikv_util::info!("engine_2 is {}", eng_ids[1]);
+    let engine_2 = cluster.raw.get_engine(eng_ids[1]);
     must_get_none(&engine_2, first_key);
     // add peer (engine_2,engine_2) to region 1.
-    pd_client.must_add_peer(r1, new_peer(*eng_ids[1], *eng_ids[1]));
+    pd_client.must_add_peer(r1, new_peer(eng_ids[1], eng_ids[1]));
 
     let (key, value) = (b"k2", b"v2");
     cluster.raw.must_put(key, value);
@@ -281,5 +292,68 @@ fn test_huge_snapshot() {
     // now snapshot must be applied on peer engine_2;
     must_get_equal(&engine_2, first_key, first_value.as_slice());
 
+    fail::cfg("on_ob_post_apply_snapshot", "return").unwrap();
+
+    tikv_util::info!("engine_3 is {}", eng_ids[2]);
+    let engine_3 = cluster.raw.get_engine(eng_ids[2]);
+    must_get_none(&engine_3, first_key);
+    pd_client.must_add_peer(r1, new_peer(eng_ids[2], eng_ids[2]));
+
+    let (key, value) = (b"k3", b"v3");
+    cluster.raw.must_put(key, value);
+    assert_eq!(cluster.raw.get(key), Some(value.to_vec()));
+    must_get_equal(&engine_3, key, value);
+    // We have not persist pre handled snapshot,
+    // we can't be sure if it exists in only get from memory too, since pre handle snapshot is async.
+    must_get_none(&engine_3, first_key);
+
+    fail::remove("on_ob_post_apply_snapshot");
+
     cluster.raw.shutdown();
+}
+
+#[test]
+fn test_concurrent_snapshot() {
+    let pd_client = Arc::new(TestPdClient::new(0, false));
+    let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
+    let mut cluster = mock_engine_store::mock_cluster::Cluster::new(0, 3, sim, pd_client.clone());
+
+    // Disable raft log gc in this test case.
+    cluster.raw.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
+
+    // Disable default max peer count check.
+    pd_client.disable_default_operator();
+
+    let r1 = cluster.run_conf_change();
+    cluster.raw.must_put(b"k1", b"v1");
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    // Force peer 2 to be followers all the way.
+    cluster.raw.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(r1, 2)
+            .msg_type(MessageType::MsgRequestVote)
+            .direction(Direction::Send),
+    ));
+    cluster.raw.must_transfer_leader(r1, new_peer(1, 1));
+    cluster.raw.must_put(b"k3", b"v3");
+    // Pile up snapshots of overlapped region ranges and deliver them all at once.
+    let (tx, rx) = mpsc::channel();
+    cluster
+        .raw
+        .sim
+        .wl()
+        .add_recv_filter(3, Box::new(CollectSnapshotFilter::new(tx)));
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+    let region = cluster.raw.get_region(b"k1");
+    // Ensure the snapshot of range ("", "") is sent and piled in filter.
+    if let Err(e) = rx.recv_timeout(Duration::from_secs(1)) {
+        panic!("the snapshot is not sent before split, e: {:?}", e);
+    }
+    // Split the region range and then there should be another snapshot for the split ranges.
+    cluster.raw.must_split(&region, b"k2");
+    must_get_equal(&cluster.raw.get_engine(3), b"k3", b"v3");
+    // Ensure the regions work after split.
+    cluster.raw.must_put(b"k11", b"v11");
+    must_get_equal(&cluster.raw.get_engine(3), b"k11", b"v11");
+    cluster.raw.must_put(b"k4", b"v4");
+    must_get_equal(&cluster.raw.get_engine(3), b"k4", b"v4");
 }
