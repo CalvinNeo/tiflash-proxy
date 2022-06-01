@@ -1,4 +1,4 @@
-use engine_traits::{RaftEngine, KvEngine};
+use engine_traits::{KvEngine, RaftEngine};
 use futures::executor::block_on;
 use futures_util::compat::Future01CompatExt;
 use futures_util::future::BoxFuture;

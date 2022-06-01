@@ -176,7 +176,11 @@ impl SyncMutable for RocksEngine {
     fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
         if self.do_write(cf, key) {
             let handle = get_cf_handle(&self.rocks.db, cf)?;
-            return self.rocks.db.put_cf(handle, key, value).map_err(Error::Engine);
+            return self
+                .rocks
+                .db
+                .put_cf(handle, key, value)
+                .map_err(Error::Engine);
         }
         Ok(())
     }

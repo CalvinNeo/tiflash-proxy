@@ -1,22 +1,24 @@
 #![feature(slice_take)]
 
+use encryption::DataKeyManager;
 use engine_store_ffi::interfaces::root::DB as ffi_interfaces;
-use engine_store_ffi::{EngineStoreServerHelper, RaftStoreProxyFFIHelper, UnwrapExternCFunc, RawCppPtr};
+use engine_store_ffi::{
+    EngineStoreServerHelper, RaftStoreProxyFFIHelper, RawCppPtr, UnwrapExternCFunc,
+};
 use engine_traits::{Engines, SyncMutable};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use protobuf::Message;
+use raftstore::store::RaftRouter;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Mutex;
-use std::time::Duration;
-use tikv_util::{debug, info, warn};
-use test_raftstore::{Simulator, TestPdClient};
 use std::sync::{Arc, RwLock};
-use raftstore::store::RaftRouter;
+use std::time::Duration;
+use test_raftstore::{Simulator, TestPdClient};
 use tikv::config::TiKvConfig;
-use encryption::DataKeyManager;
 use tikv::server::{Node, Result as ServerResult};
+use tikv_util::{debug, info, warn};
 
 pub mod mock_cluster;
 pub mod node;
@@ -28,6 +30,7 @@ type RegionId = u64;
 pub struct Region {
     region: kvproto::metapb::Region,
     peer: kvproto::metapb::Peer,
+    // im-memory data
     pub data: [BTreeMap<Vec<u8>, Vec<u8>>; 3],
     apply_state: kvproto::raft_serverpb::RaftApplyState,
 }
@@ -39,7 +42,10 @@ pub struct EngineStoreServer {
 }
 
 impl EngineStoreServer {
-    pub fn new(id: u64, engines: Option<Engines<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>>) -> Self {
+    pub fn new(
+        id: u64,
+        engines: Option<Engines<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>>,
+    ) -> Self {
         EngineStoreServer {
             id,
             engines,
@@ -136,7 +142,8 @@ impl EngineStoreServerWrap {
                     }
                     engine_store_ffi::WriteCmdType::Del => {
                         let tikv_key = keys::data_key(key.to_slice());
-                        kv.rocks.delete_cf(cf_to_name(cf.to_owned().into()), &tikv_key);
+                        kv.rocks
+                            .delete_cf(cf_to_name(cf.to_owned().into()), &tikv_key);
                         data.remove(&k.to_vec());
                     }
                 }
@@ -482,7 +489,7 @@ unsafe extern "C" fn ffi_pre_handle_snapshot(
         apply_state: Default::default(),
     };
 
-    debug!("apply snaps with len {}", snaps.len);
+    debug!("pre handle snaps with len {} peer_id {} region {:?}", snaps.len, peer_id, region.region);
     for i in 0..snaps.len {
         let mut snapshot = snaps.views.add(i as usize);
         let mut sst_reader =
@@ -531,7 +538,6 @@ unsafe extern "C" fn ffi_apply_pre_handled_snapshot(
     let store = into_engine_store_server_wrap(arg1);
     let req = &mut *(arg2 as *mut PrehandledSnapshot);
     let node_id = (*store.engine_store_server).id;
-
     let req_id = req.region.as_ref().unwrap().region.id;
 
     &(*store.engine_store_server)
@@ -543,12 +549,15 @@ unsafe extern "C" fn ffi_apply_pre_handled_snapshot(
         .get_mut(&req_id)
         .unwrap();
 
+    debug!("apply snaps peer_id {} region {:?}", node_id, &region.region);
+
     let kv = &mut (*store.engine_store_server).engines.as_mut().unwrap().kv;
     for cf in 0..3 {
-        for (k, v) in std::mem::take(region.data.as_mut().get_mut(cf).unwrap()).into_iter() {
+        let cf_data = region.data.as_mut().get_mut(cf).unwrap();
+        for (k, v) in std::mem::take(cf_data).into_iter() {
             let tikv_key = keys::data_key(k.as_slice());
             let cf_name = cf_to_name(cf.into());
-            kv.put_cf(cf_name, &tikv_key, &v);
+            kv.rocks.put_cf(cf_name, &tikv_key, &v);
         }
     }
 }
@@ -613,4 +622,3 @@ unsafe extern "C" fn ffi_handle_compute_store_stats(
         engine_keys_read: 0,
     }
 }
-

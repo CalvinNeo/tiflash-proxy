@@ -1,11 +1,11 @@
+pub mod config;
 #[allow(dead_code)]
 pub mod interfaces;
-pub mod read_index_helper;
-pub mod utils;
 pub mod lock_cf_reader;
 pub mod observer;
-pub mod config;
+pub mod read_index_helper;
 pub mod status_server;
+pub mod utils;
 
 use encryption::DataKeyManager;
 use engine_rocks::encryption::get_env;
@@ -61,7 +61,7 @@ pub struct RaftStoreProxy {
     pub status: AtomicU8,
     pub key_manager: Option<Arc<DataKeyManager>>,
     // send a ReadIndex through RaftRouter
-    pub read_index_client: Box<dyn read_index_helper::ReadIndex>,
+    pub read_index_client: Option<Box<dyn read_index_helper::ReadIndex>>,
     // this kv engine to currently used to read RegionLocalState
     pub kv_engine: std::sync::RwLock<Option<RocksEngine>>,
 }
@@ -78,7 +78,7 @@ impl RaftStoreProxy {
     pub fn new(
         status: AtomicU8,
         key_manager: Option<Arc<DataKeyManager>>,
-        read_index_client: Box<dyn read_index_helper::ReadIndex>,
+        read_index_client: Option<Box<dyn read_index_helper::ReadIndex>>,
         kv_engine: std::sync::RwLock<Option<RocksEngine>>,
     ) -> Self {
         RaftStoreProxy {
@@ -229,6 +229,8 @@ pub extern "C" fn ffi_batch_read_index(
         let resp = proxy_ptr
             .as_ref()
             .read_index_client
+            .as_ref()
+            .unwrap()
             .batch_read_index(req_vec, time::Duration::from_millis(timeout_ms));
         assert_ne!(res, std::ptr::null_mut());
         for (r, region_id) in &resp {
@@ -259,10 +261,7 @@ impl Into<u32> for RawRustPtrType {
     }
 }
 
-pub extern "C" fn ffi_gc_rust_ptr(
-    data: RawVoidPtr,
-    type_: interfaces::root::DB::RawRustPtrType,
-) {
+pub extern "C" fn ffi_gc_rust_ptr(data: RawVoidPtr, type_: interfaces::root::DB::RawRustPtrType) {
     if data.is_null() {
         return;
     }
@@ -307,6 +306,8 @@ pub extern "C" fn ffi_make_read_index_task(
         proxy_ptr
             .as_ref()
             .read_index_client
+            .as_ref()
+            .unwrap()
             .make_read_index_task(req)
     };
     return match task {
@@ -352,9 +353,7 @@ pub extern "C" fn ffi_poll_read_index_task(
     waker: RawVoidPtr,
 ) -> u8 {
     assert!(!proxy_ptr.is_null());
-    let task = unsafe {
-        &mut *(task_ptr as *mut read_index_helper::ReadIndexTask)
-    };
+    let task = unsafe { &mut *(task_ptr as *mut read_index_helper::ReadIndexTask) };
     let waker = if std::ptr::null_mut() == waker {
         None
     } else {
@@ -364,6 +363,8 @@ pub extern "C" fn ffi_poll_read_index_task(
         proxy_ptr
             .as_ref()
             .read_index_client
+            .as_ref()
+            .unwrap()
             .poll_read_index_task(task, waker)
     } {
         get_engine_store_server_helper().set_read_index_resp(resp_data, &res);

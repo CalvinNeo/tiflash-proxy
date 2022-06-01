@@ -1,2 +1,2 @@
-mod normal;
 mod ingest;
+mod normal;

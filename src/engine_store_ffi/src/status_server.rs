@@ -1,7 +1,6 @@
-
-use tikv::server::status_server;
-use hyper::{self, header, Body, Method, Request, Response, Server, StatusCode};
 use async_trait::async_trait;
+use hyper::{self, header, Body, Method, Request, Response, Server, StatusCode};
+use tikv::server::status_server;
 
 #[derive(Clone)]
 pub struct TiFlashEngineStatus {
@@ -62,7 +61,8 @@ pub async fn handle_http_request(
 }
 
 fn err_response<T>(status_code: StatusCode, message: T) -> Response<Body>
-    where T: Into<Body>,
+where
+    T: Into<Body>,
 {
     Response::builder()
         .status(status_code)

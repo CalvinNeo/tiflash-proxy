@@ -1,39 +1,39 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::rawserver;
 use api_version::{dispatch_api_version, APIVersion};
+use engine_traits::{ColumnFamilyOptions, Engines, RaftEngine};
+use file_system::get_io_rate_limiter;
 use raft_log_engine::RaftLogEngine;
+use raftstore::store::fsm::store::PENDING_MSG_CAP;
+use raftstore::store::fsm::StoreMeta;
+use raftstore::store::LocalReader;
+use rawserver::ConfiguredRaftEngine;
+use rawserver::EnginesResourceInfo;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+use tikv::server::RaftKv;
 use tikv::{config::TiKvConfig, server::CPU_CORES_QUOTA_GAUGE};
 use tikv_util::{
     sys::{register_memory_usage_high_water, SysQuota},
     time::{Instant, Monitor},
 };
-use engine_traits::{
-    ColumnFamilyOptions, Engines,
-    RaftEngine
-};
-use std::sync::{Arc, Mutex};
-use file_system::get_io_rate_limiter;
-use std::path::Path;
-use raftstore::store::LocalReader;
-use tikv::server::RaftKv;
-use crate::rawserver;
-use rawserver::ConfiguredRaftEngine;
-use rawserver::EnginesResourceInfo;
-use raftstore::store::fsm::StoreMeta;
-use raftstore::store::fsm::store::PENDING_MSG_CAP;
 
-use server::fatal;
-use tikv_util::{crit, info, warn, error, error_unknown, thd_name};
-use engine_store_ffi::*;
-use std::time::Duration;
-use std::sync::atomic::AtomicU8;
 use engine_store_ffi::config::ProxyConfig;
+use engine_store_ffi::*;
+use server::fatal;
+use std::sync::atomic::AtomicU8;
+use std::time::Duration;
+use tikv_util::{crit, error, error_unknown, info, thd_name, warn};
 
 pub fn init_tiflash_engines<CER: ConfiguredRaftEngine>(
     tikv: &mut rawserver::TiKVServer<CER>,
     flow_listener: engine_rocks::FlowListener,
     engine_store_server_helper: isize,
-) -> (Engines<engine_tiflash::RocksEngine, CER>, Arc<EnginesResourceInfo>) {
+) -> (
+    Engines<engine_tiflash::RocksEngine, CER>,
+    Arc<EnginesResourceInfo>,
+) {
     let block_cache = tikv.config.storage.block_cache.build_shared_cache();
     let env = tikv
         .config
@@ -52,12 +52,15 @@ pub fn init_tiflash_engines<CER: ConfiguredRaftEngine>(
         Some(&tikv.region_info_accessor),
         tikv.config.storage.api_version(),
     );
-    let db_path = tikv.store_path.join(Path::new(tikv::config::DEFAULT_ROCKSDB_SUB_DIR));
+    let db_path = tikv
+        .store_path
+        .join(Path::new(tikv::config::DEFAULT_ROCKSDB_SUB_DIR));
     let kv_engine = engine_tiflash::raw_util::new_engine_opt(
         db_path.to_str().unwrap(),
         kv_db_opts,
         kv_cfs_opts,
-    ).unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
+    )
+    .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
 
     // engine_tiflash::RocksEngine has engine_rocks::RocksEngine inside
     let mut kv_engine = engine_tiflash::RocksEngine::from_db(Arc::new(kv_engine));
@@ -85,7 +88,11 @@ pub fn init_tiflash_engines<CER: ConfiguredRaftEngine>(
 }
 
 #[inline]
-fn run_impl<CER: ConfiguredRaftEngine, Api: APIVersion>(config: TiKvConfig, proxy_config: ProxyConfig, engine_store_server_helper: isize) {
+fn run_impl<CER: ConfiguredRaftEngine, Api: APIVersion>(
+    config: TiKvConfig,
+    proxy_config: ProxyConfig,
+    engine_store_server_helper: isize,
+) {
     let mut tikv = rawserver::TiKVServer::<CER>::init(config, proxy_config);
 
     // Must be called after `TiKVServer::init`.
@@ -101,10 +108,10 @@ fn run_impl<CER: ConfiguredRaftEngine, Api: APIVersion>(config: TiKvConfig, prox
     let mut proxy = RaftStoreProxy::new(
         AtomicU8::new(RaftProxyStatus::Idle as u8),
         tikv.encryption_key_manager.clone(),
-        Box::new(ReadIndexClient::new(
+        Some(Box::new(ReadIndexClient::new(
             tikv.router.clone(),
             SysQuota::cpu_cores_quota() as usize * 2,
-        )),
+        ))),
         std::sync::RwLock::new(None),
     );
 
@@ -133,7 +140,8 @@ fn run_impl<CER: ConfiguredRaftEngine, Api: APIVersion>(config: TiKvConfig, prox
     let fetcher = tikv.init_io_utility();
     let listener = tikv.init_flow_receiver();
     // We use engine_tiflash
-    let (engines, engines_info) = init_tiflash_engines(&mut tikv, listener, engine_store_server_helper);
+    let (engines, engines_info) =
+        init_tiflash_engines(&mut tikv, listener, engine_store_server_helper);
     tikv.init_engines(engines.clone());
 
     {
@@ -168,10 +176,10 @@ fn run_impl<CER: ConfiguredRaftEngine, Api: APIVersion>(config: TiKvConfig, prox
         }
     }
 
-    info!("found engine-store server status is {:?}, start to stop all services",
-            get_engine_store_server_helper().handle_get_engine_store_server_status()
-        );
-
+    info!(
+        "found engine-store server status is {:?}, start to stop all services",
+        get_engine_store_server_helper().handle_get_engine_store_server_status()
+    );
 
     server::signal_handler::wait_for_signal(Some(tikv.engines.take().unwrap().engines));
     tikv.stop();
@@ -212,7 +220,11 @@ pub fn run_tikv(config: TiKvConfig, proxy_config: ProxyConfig, engine_store_serv
 
     dispatch_api_version!(config.storage.api_version(), {
         if !config.raft_engine.enable {
-            run_impl::<engine_rocks::RocksEngine, API>(config, proxy_config, engine_store_server_helper)
+            run_impl::<engine_rocks::RocksEngine, API>(
+                config,
+                proxy_config,
+                engine_store_server_helper,
+            )
         } else {
             run_impl::<RaftLogEngine, API>(config, proxy_config, engine_store_server_helper)
         }

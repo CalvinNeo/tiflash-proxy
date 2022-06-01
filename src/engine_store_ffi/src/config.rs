@@ -1,16 +1,14 @@
-use std::{
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
-use serde_derive::{Deserialize, Serialize};
+use itertools::Itertools;
 use online_config::OnlineConfig;
+use serde_derive::{Deserialize, Serialize};
+use server::fatal;
+use std::collections::hash_map::RandomState;
 use std::collections::HashSet;
 use std::iter::FromIterator;
-use itertools::Itertools;
-use std::collections::hash_map::RandomState;
 use tikv::config::TiKvConfig;
 use tikv_util::crit;
-use server::fatal;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
@@ -45,25 +43,31 @@ impl ProxyConfig {
     }
 }
 
-pub fn ensure_no_common_unrecognized_keys(proxy_unrecognized_keys: &Vec<String>, unrecognized_keys: &Vec<String>) -> Result<(), String> {
+pub fn ensure_no_common_unrecognized_keys(
+    proxy_unrecognized_keys: &Vec<String>,
+    unrecognized_keys: &Vec<String>,
+) -> Result<(), String> {
     // We can't just compute intersection, since `rocksdb.z` equals not `rocksdb`.
     let proxy_part = HashSet::<_>::from_iter(proxy_unrecognized_keys.iter());
-    let inter = unrecognized_keys.iter().filter(|s| {
-        let mut pref: String = String::from("");
-        for p in s.split(".") {
-            if pref != "" {
-                pref += "."
+    let inter = unrecognized_keys
+        .iter()
+        .filter(|s| {
+            let mut pref: String = String::from("");
+            for p in s.split(".") {
+                if pref != "" {
+                    pref += "."
+                }
+                pref += p;
+                if proxy_part.contains(&pref) {
+                    // common unrecognized by both config.
+                    return true;
+                }
             }
-            pref += p;
-            if proxy_part.contains(&pref) {
-                // common unrecognized by both config.
-                return true;
-            }
-        }
-        return false;
-    }).collect::<Vec<_>>();
+            return false;
+        })
+        .collect::<Vec<_>>();
     if inter.len() != 0 {
-        return Err(inter.iter().join(", "))
+        return Err(inter.iter().join(", "));
     }
     Ok(())
 }
@@ -77,6 +81,8 @@ pub fn address_proxy_config(config: &mut TiKvConfig) {
         }
         Some(name) => name.to_owned(),
     };
-    config.server.labels
+    config
+        .server
+        .labels
         .insert(DEFAULT_ENGINE_LABEL_KEY.to_owned(), engine_name);
 }

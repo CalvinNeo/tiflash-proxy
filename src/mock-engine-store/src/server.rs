@@ -19,12 +19,15 @@ use tempfile::TempDir;
 use tikv::storage::kv::SnapContext;
 use tokio::runtime::Builder as TokioBuilder;
 
-use test_raftstore::Config;
+use crate::mock_cluster::create_tiflash_test_engine;
+use crate::transport_simulate::{Filter, SimulateTransport};
+use crate::{Simulator, TestPdClient};
 use api_version::{dispatch_api_version, APIVersion};
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
 use engine_rocks::{PerfLevel, RocksSnapshot};
+use engine_traits::KvEngine;
 use engine_traits::{Engines, MiscExt};
 use pd_client::PdClient;
 use raftstore::errors::Error as RaftError;
@@ -45,6 +48,8 @@ use raftstore::{
 };
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use security::SecurityManager;
+use test_raftstore::Cluster;
+use test_raftstore::Config;
 use tikv::coprocessor;
 use tikv::coprocessor_v2;
 use tikv::import::{ImportSSTService, SSTImporter};
@@ -62,24 +67,22 @@ use tikv::server::{
 use tikv::storage::txn::flow_controller::FlowController;
 use tikv::storage::{self, Engine};
 use tikv::{config::ConfigController, server::raftkv::ReplicaReadLockChecker};
+use tikv_util::box_err;
 use tikv_util::config::VersionTrack;
 use tikv_util::quota_limiter::QuotaLimiter;
+use tikv_util::thd_name;
 use tikv_util::time::ThreadReadId;
 use tikv_util::worker::{Builder as WorkerBuilder, LazyWorker};
 use tikv_util::HandyRwLock;
-use txn_types::TxnExtraScheduler;
-use engine_traits::KvEngine;
-use crate::{Simulator, TestPdClient};
-use crate::mock_cluster::{ create_tiflash_test_engine };
-use test_raftstore::Cluster;
-use tikv_util::box_err;
 use tikv_util::{debug, defer};
-use crate::transport_simulate::{SimulateTransport, Filter};
-use tikv_util::thd_name;
+use txn_types::TxnExtraScheduler;
 
-type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>>;
-type SimulateServerTransport =
-    SimulateTransport<ServerTransport<SimulateStoreTransport, PdStoreAddrResolver, engine_tiflash::RocksEngine>>;
+type SimulateStoreTransport = SimulateTransport<
+    ServerRaftStoreRouter<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>,
+>;
+type SimulateServerTransport = SimulateTransport<
+    ServerTransport<SimulateStoreTransport, PdStoreAddrResolver, engine_tiflash::RocksEngine>,
+>;
 
 pub type SimulateEngine = RaftKv<engine_tiflash::RocksEngine, SimulateStoreTransport>;
 
@@ -124,7 +127,10 @@ struct ServerMeta {
     sim_trans: SimulateServerTransport,
     raw_router: RaftRouter<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>,
     raw_apply_router: ApplyRouter<engine_tiflash::RocksEngine>,
-    gc_worker: GcWorker<RaftKv<engine_tiflash::RocksEngine, SimulateStoreTransport>, SimulateStoreTransport>,
+    gc_worker: GcWorker<
+        RaftKv<engine_tiflash::RocksEngine, SimulateStoreTransport>,
+        SimulateStoreTransport,
+    >,
     rts_worker: Option<LazyWorker<resolved_ts::Task<RocksSnapshot>>>,
     rsmeter_cleanup: Box<dyn FnOnce()>,
 }
@@ -207,7 +213,10 @@ impl ServerCluster {
     pub fn get_gc_worker(
         &self,
         node_id: u64,
-    ) -> &GcWorker<RaftKv<engine_tiflash::RocksEngine, SimulateStoreTransport>, SimulateStoreTransport> {
+    ) -> &GcWorker<
+        RaftKv<engine_tiflash::RocksEngine, SimulateStoreTransport>,
+        SimulateStoreTransport,
+    > {
         &self.metas.get(&node_id).unwrap().gc_worker
     }
 
@@ -695,37 +704,74 @@ impl Simulator<engine_tiflash::RocksEngine> for ServerCluster {
             .clear_filters();
     }
 
-    fn get_router(&self, node_id: u64) -> Option<RaftRouter<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>> {
+    fn get_router(
+        &self,
+        node_id: u64,
+    ) -> Option<RaftRouter<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>> {
         self.metas.get(&node_id).map(|m| m.raw_router.clone())
     }
 }
 
-pub fn new_server_cluster(id: u64, count: usize) -> Cluster<ServerCluster, engine_tiflash::RocksEngine> {
+pub fn new_server_cluster(
+    id: u64,
+    count: usize,
+) -> Cluster<ServerCluster, engine_tiflash::RocksEngine> {
     let pd_client = Arc::new(TestPdClient::new(id, false));
     let sim = Arc::new(RwLock::new(ServerCluster::new(Arc::clone(&pd_client))));
-    Cluster::new(id, count, sim, pd_client, create_tiflash_test_engine, |r: &engine_tiflash::RocksEngine| Arc::clone(r.as_inner()))
+    Cluster::new(
+        id,
+        count,
+        sim,
+        pd_client,
+        create_tiflash_test_engine,
+        |r: &engine_tiflash::RocksEngine| Arc::clone(r.as_inner()),
+    )
 }
 
-pub fn new_incompatible_server_cluster(id: u64, count: usize) -> Cluster<ServerCluster, engine_tiflash::RocksEngine> {
+pub fn new_incompatible_server_cluster(
+    id: u64,
+    count: usize,
+) -> Cluster<ServerCluster, engine_tiflash::RocksEngine> {
     let pd_client = Arc::new(TestPdClient::new(id, true));
     let sim = Arc::new(RwLock::new(ServerCluster::new(Arc::clone(&pd_client))));
-    Cluster::new(id, count, sim, pd_client, create_tiflash_test_engine, |r: &engine_tiflash::RocksEngine| Arc::clone(r.as_inner()))
+    Cluster::new(
+        id,
+        count,
+        sim,
+        pd_client,
+        create_tiflash_test_engine,
+        |r: &engine_tiflash::RocksEngine| Arc::clone(r.as_inner()),
+    )
 }
 
-pub fn must_new_cluster_mul(count: usize) -> (Cluster<ServerCluster, engine_tiflash::RocksEngine>, metapb::Peer, Context) {
+pub fn must_new_cluster_mul(
+    count: usize,
+) -> (
+    Cluster<ServerCluster, engine_tiflash::RocksEngine>,
+    metapb::Peer,
+    Context,
+) {
     must_new_and_configure_cluster_mul(count, |_| ())
 }
 
 pub fn must_new_and_configure_cluster(
     configure: impl FnMut(&mut Cluster<ServerCluster, engine_tiflash::RocksEngine>),
-) -> (Cluster<ServerCluster, engine_tiflash::RocksEngine>, metapb::Peer, Context) {
+) -> (
+    Cluster<ServerCluster, engine_tiflash::RocksEngine>,
+    metapb::Peer,
+    Context,
+) {
     must_new_and_configure_cluster_mul(1, configure)
 }
 
 fn must_new_and_configure_cluster_mul(
     count: usize,
     mut configure: impl FnMut(&mut Cluster<ServerCluster, engine_tiflash::RocksEngine>),
-) -> (Cluster<ServerCluster, engine_tiflash::RocksEngine>, metapb::Peer, Context) {
+) -> (
+    Cluster<ServerCluster, engine_tiflash::RocksEngine>,
+    metapb::Peer,
+    Context,
+) {
     let mut cluster = new_server_cluster(0, count);
     configure(&mut cluster);
     cluster.run();
@@ -740,13 +786,21 @@ fn must_new_and_configure_cluster_mul(
     (cluster, leader, ctx)
 }
 
-pub fn must_new_cluster_and_kv_client() -> (Cluster<ServerCluster, engine_tiflash::RocksEngine>, TikvClient, Context) {
+pub fn must_new_cluster_and_kv_client() -> (
+    Cluster<ServerCluster, engine_tiflash::RocksEngine>,
+    TikvClient,
+    Context,
+) {
     must_new_cluster_and_kv_client_mul(1)
 }
 
 pub fn must_new_cluster_and_kv_client_mul(
     count: usize,
-) -> (Cluster<ServerCluster, engine_tiflash::RocksEngine>, TikvClient, Context) {
+) -> (
+    Cluster<ServerCluster, engine_tiflash::RocksEngine>,
+    TikvClient,
+    Context,
+) {
     let (cluster, leader, ctx) = must_new_cluster_mul(count);
 
     let env = Arc::new(Environment::new(1));
@@ -757,7 +811,11 @@ pub fn must_new_cluster_and_kv_client_mul(
     (cluster, client, ctx)
 }
 
-pub fn must_new_cluster_and_debug_client() -> (Cluster<ServerCluster, engine_tiflash::RocksEngine>, DebugClient, u64) {
+pub fn must_new_cluster_and_debug_client() -> (
+    Cluster<ServerCluster, engine_tiflash::RocksEngine>,
+    DebugClient,
+    u64,
+) {
     let (cluster, leader, _) = must_new_cluster_mul(1);
 
     let env = Arc::new(Environment::new(1));
@@ -770,7 +828,11 @@ pub fn must_new_cluster_and_debug_client() -> (Cluster<ServerCluster, engine_tif
 
 pub fn must_new_and_configure_cluster_and_kv_client(
     configure: impl FnMut(&mut Cluster<ServerCluster, engine_tiflash::RocksEngine>),
-) -> (Cluster<ServerCluster, engine_tiflash::RocksEngine>, TikvClient, Context) {
+) -> (
+    Cluster<ServerCluster, engine_tiflash::RocksEngine>,
+    TikvClient,
+    Context,
+) {
     let (cluster, leader, ctx) = must_new_and_configure_cluster(configure);
 
     let env = Arc::new(Environment::new(1));

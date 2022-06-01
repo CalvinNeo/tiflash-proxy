@@ -5,8 +5,8 @@ use std::os::raw::{c_char, c_int};
 use tikv_util::*;
 
 mod proxy;
-mod run;
 mod rawserver;
+mod run;
 
 fn log_proxy_info() {
     info!("Welcome To RaftStore Proxy");

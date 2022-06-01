@@ -9,8 +9,8 @@ use std::{mem, thread, time, usize};
 
 use collections::{HashMap, HashSet};
 use crossbeam::channel::TrySendError;
-use engine_tiflash::{RocksEngine};
 use engine_rocks::RocksSnapshot;
+use engine_tiflash::RocksEngine;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
@@ -21,9 +21,9 @@ use raftstore::store::{
 };
 use raftstore::Result as RaftStoreResult;
 use raftstore::{DiscardReason, Error, Result};
+use tikv_util::error;
 use tikv_util::time::ThreadReadId;
 use tikv_util::{Either, HandyRwLock};
-use tikv_util::error;
 
 pub fn check_messages(msgs: &[RaftMessage]) -> Result<()> {
     if msgs.is_empty() {
@@ -742,7 +742,11 @@ impl Filter for LeadingDuplicatedSnapshotFilter {
             .dropped
             .compare_exchange(true, false, Ordering::Relaxed, Ordering::Relaxed)
             .is_ok();
-        if res.is_err() && dropped { Ok(()) } else { res }
+        if res.is_err() && dropped {
+            Ok(())
+        } else {
+            res
+        }
     }
 }
 

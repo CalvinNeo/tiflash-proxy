@@ -4,12 +4,12 @@ use std::path::Path;
 use std::process;
 
 use clap::{App, Arg};
+use engine_store_ffi::config::ProxyConfig;
 use server::setup::{ensure_no_unrecognized_config, validate_and_persist_config};
 use slog_global::*;
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_int};
 use tikv::config::TiKvConfig;
-use engine_store_ffi::config::ProxyConfig;
 
 pub fn proxy_version_info() -> String {
     let fallback = "Unknown (env var does not exist when building)";
@@ -48,9 +48,8 @@ pub unsafe fn run_proxy(
     engine_store_server_helper: *const u8,
 ) {
     engine_store_ffi::init_engine_store_server_helper(engine_store_server_helper);
-    let engine_store_server_helper = engine_store_ffi::gen_engine_store_server_helper(
-        engine_store_server_helper as isize,
-    );
+    let engine_store_server_helper =
+        engine_store_ffi::gen_engine_store_server_helper(engine_store_server_helper as isize);
 
     let mut args = vec![];
 
@@ -306,9 +305,9 @@ pub unsafe fn run_proxy(
 
     let mut proxy_unrecognized_keys = Vec::new();
     // Double read the same file for proxy-specific arguments.
-    let mut proxy_config = matches
-        .value_of_os("config")
-        .map_or_else(engine_store_ffi::config::ProxyConfig::default, |path| {
+    let mut proxy_config = matches.value_of_os("config").map_or_else(
+        engine_store_ffi::config::ProxyConfig::default,
+        |path| {
             let path = Path::new(path);
             engine_store_ffi::config::ProxyConfig::from_file(
                 path,
@@ -325,24 +324,29 @@ pub unsafe fn run_proxy(
                     e
                 );
             })
-        });
+        },
+    );
 
     if is_config_check {
         validate_and_persist_config(&mut config, false);
-        match engine_store_ffi::config::ensure_no_common_unrecognized_keys(&proxy_unrecognized_keys, &unrecognized_keys) {
+        match engine_store_ffi::config::ensure_no_common_unrecognized_keys(
+            &proxy_unrecognized_keys,
+            &unrecognized_keys,
+        ) {
             Ok(_) => (),
             Err(e) => {
-                server::fatal!(
-                    "unknown configuration options: {}",
-                    e
-                );
-            },
+                server::fatal!("unknown configuration options: {}", e);
+            }
         }
         println!("config check successful");
         process::exit(0)
     }
 
-    crate::run::run_tikv(config, proxy_config, engine_store_server_helper as *const _ as isize);
+    crate::run::run_tikv(
+        config,
+        proxy_config,
+        engine_store_server_helper as *const _ as isize,
+    );
 }
 
 fn check_engine_label(matches: &clap::ArgMatches<'_>) {

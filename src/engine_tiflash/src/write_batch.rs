@@ -105,7 +105,7 @@ pub fn do_write(cf: &str, key: &[u8]) -> bool {
         engine_traits::CF_DEFAULT => {
             key == keys::PREPARE_BOOTSTRAP_KEY || key == keys::STORE_IDENT_KEY
         }
-        _ => false
+        _ => false,
     }
 }
 
@@ -126,7 +126,7 @@ impl Mutable for RocksWriteBatch {
     fn put_cf(&mut self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
         if self.do_write(cf, key) {
             let handle = get_cf_handle(self.db.as_ref(), cf)?;
-            return self.wb.put_cf(handle, key, value).map_err(Error::Engine)
+            return self.wb.put_cf(handle, key, value).map_err(Error::Engine);
         }
         Ok(())
     }
@@ -141,7 +141,7 @@ impl Mutable for RocksWriteBatch {
     fn delete_cf(&mut self, cf: &str, key: &[u8]) -> Result<()> {
         if self.do_write(cf, key) {
             let handle = get_cf_handle(self.db.as_ref(), cf)?;
-            return self.wb.delete_cf(handle, key).map_err(Error::Engine)
+            return self.wb.delete_cf(handle, key).map_err(Error::Engine);
         }
         Ok(())
     }

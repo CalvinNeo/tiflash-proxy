@@ -248,7 +248,7 @@ mod tests {
         assert_eq!(vec!["1", "2"], cfs_diff(&a, &c));
         assert_eq!(vec!["4", "5", "6"], cfs_diff(&c, &a));
         let d = vec!["1", "2", "3", "4"];
-        let a_diff_d = cfs_diff(new_engine_opt&a, &d);
+        let a_diff_d = cfs_diff(new_engine_opt & a, &d);
         assert!(a_diff_d.is_empty());
         assert_eq!(vec!["4"], cfs_diff(&d, &a));
     }

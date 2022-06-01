@@ -103,10 +103,10 @@ use tikv_util::{
 };
 use tokio::runtime::Builder;
 
+use server::fatal;
 use server::raft_engine_switch::*;
 use server::{memory::*, setup::*, signal_handler};
-use server::fatal;
-use tikv_util::{crit, info, warn, error, error_unknown, thd_name};
+use tikv_util::{crit, error, error_unknown, info, thd_name, warn};
 
 use engine_store_ffi::config::ProxyConfig;
 use engine_store_ffi::gen_engine_store_server_helper;
@@ -164,7 +164,7 @@ pub struct Servers<EK: KvEngine, ER: RaftEngine> {
 }
 
 type LocalServer<EK, ER> =
-Server<RaftRouter<EK, ER>, resolve::PdStoreAddrResolver, LocalRaftKv<EK, ER>>;
+    Server<RaftRouter<EK, ER>, resolve::PdStoreAddrResolver, LocalRaftKv<EK, ER>>;
 type LocalRaftKv<EK, ER> = RaftKv<EK, ServerRaftStoreRouter<EK, ER>>;
 
 impl<ER: RaftEngine> TiKVServer<ER> {
@@ -409,8 +409,8 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 &self.config.storage.data_dir,
                 reserve_space / 5,
             )
-                .map_err(|e| panic!("Failed to reserve space for recovery: {}.", e))
-                .unwrap();
+            .map_err(|e| panic!("Failed to reserve space for recovery: {}.", e))
+            .unwrap();
         } else {
             warn!("no enough disk space left to create the place holder file");
         }
@@ -427,15 +427,15 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             &self.config.security.encryption,
             &self.config.storage.data_dir,
         )
-            .map_err(|e| {
-                panic!(
-                    "Encryption failed to initialize: {}. code: {}",
-                    e,
-                    e.error_code()
-                )
-            })
-            .unwrap()
-            .map(Arc::new);
+        .map_err(|e| {
+            panic!(
+                "Encryption failed to initialize: {}. code: {}",
+                e,
+                e.error_code()
+            )
+        })
+        .unwrap()
+        .map(Arc::new);
     }
 
     pub fn init_flow_receiver(&mut self) -> engine_rocks::FlowListener {
@@ -496,7 +496,10 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         gc_worker
     }
 
-    pub fn init_servers<Api: APIVersion>(&mut self, engine_store_server_helper: isize) -> Arc<VersionTrack<ServerConfig>> {
+    pub fn init_servers<Api: APIVersion>(
+        &mut self,
+        engine_store_server_helper: isize,
+    ) -> Arc<VersionTrack<ServerConfig>> {
         self.engine_store_server_helper = engine_store_server_helper;
         let flow_controller = Arc::new(FlowController::new(
             &self.config.storage.flow_control,
@@ -617,7 +620,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             Arc::clone(&self.quota_limiter),
             self.pd_client.feature_gate().clone(),
         )
-            .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
+        .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
         cfg_controller.register(
             tikv::config::Module::Storage,
             Box::new(StorageConfigManger::new(
@@ -742,9 +745,8 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         node.try_bootstrap_store(engines.engines.clone())
             .unwrap_or_else(|e| fatal!("failed to bootstrap node id: {}", e));
         {
-            engine_store_ffi::gen_engine_store_server_helper(
-                engine_store_server_helper,
-            ).set_store(node.store());
+            engine_store_ffi::gen_engine_store_server_helper(engine_store_server_helper)
+                .set_store(node.store());
             info!("set store {} to engine-store", node.id());
         }
 
@@ -772,7 +774,8 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.env.clone(),
             unified_read_pool,
             debug_thread_pool,
-        ).unwrap_or_else(|e| fatal!("failed to create server: {}", e));
+        )
+        .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
 
         cfg_controller.register(
             tikv::config::Module::Server,
@@ -788,7 +791,8 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             import_path,
             self.encryption_key_manager.clone(),
             self.config.storage.api_version(),
-        ).unwrap();
+        )
+        .unwrap();
 
         for (cf_name, compression_type) in &[
             (
@@ -864,7 +868,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.concurrency_manager.clone(),
             collector_reg_handle,
         )
-            .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
+        .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
         // Start auto gc. Must after `Node::start` because `node_id` is initialized there.
         assert!(node.id() > 0); // Node id should never be 0.
@@ -1214,7 +1218,8 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         // Create a status server.
         let status_enabled = !self.config.server.status_addr.is_empty();
         let handler = engine_store_ffi::status_server::TiFlashEngineStatus::new(
-            gen_engine_store_server_helper(self.engine_store_server_helper));
+            gen_engine_store_server_helper(self.engine_store_server_helper),
+        );
         if status_enabled {
             let mut status_server = match StatusServer::new(
                 self.config.server.status_thread_pool_size,
@@ -1290,7 +1295,7 @@ impl ConfiguredRaftEngine for engine_rocks::RocksEngine {
                 server.encryption_key_manager.clone(),
                 None,
             )
-                .expect("open raft engine");
+            .expect("open raft engine");
             dump_raft_engine_to_raftdb(&raft_engine, &raftdb, 8 /*threads*/);
             raft_data_state_machine.after_dump_data();
         }
@@ -1304,7 +1309,11 @@ impl ConfiguredRaftEngine for engine_rocks::RocksEngine {
     fn register_config(&self, cfg_controller: &mut ConfigController, share_cache: bool) {
         cfg_controller.register(
             tikv::config::Module::Raftdb,
-            Box::new(tikv::config::DBConfigManger::new(self.clone(), DBType::Raft, share_cache)),
+            Box::new(tikv::config::DBConfigManger::new(
+                self.clone(),
+                DBType::Raft,
+                share_cache,
+            )),
         );
     }
 }
@@ -1324,7 +1333,7 @@ impl ConfiguredRaftEngine for RaftLogEngine {
             server.encryption_key_manager.clone(),
             get_io_rate_limiter(),
         )
-            .unwrap_or_else(|e| fatal!("Failed to create raft engine: {}", e));
+        .unwrap_or_else(|e| fatal!("Failed to create raft engine: {}", e));
 
         if should_dump {
             let config_raftdb = &server.config.raftdb;
@@ -1336,7 +1345,7 @@ impl ConfiguredRaftEngine for RaftLogEngine {
                 raft_db_opts,
                 raft_cf_opts,
             )
-                .unwrap_or_else(|e| fatal!("Failed to create raftdb: {}", e));
+            .unwrap_or_else(|e| fatal!("Failed to create raftdb: {}", e));
             let raftdb = engine_rocks::RocksEngine::from_db(Arc::new(raftdb));
             dump_raftdb_to_raft_engine(&raftdb, &raft_engine, 8 /*threads*/);
             raft_data_state_machine.after_dump_data();
@@ -1345,9 +1354,7 @@ impl ConfiguredRaftEngine for RaftLogEngine {
     }
 }
 
-impl<CER: ConfiguredRaftEngine> TiKVServer<CER> {
-
-}
+impl<CER: ConfiguredRaftEngine> TiKVServer<CER> {}
 
 /// Various sanity-checks and logging before running a server.
 ///
@@ -1446,9 +1453,9 @@ trait Stop {
 }
 
 impl<E, R> Stop for StatusServer<E, R>
-    where
-        E: 'static,
-        R: 'static + Send,
+where
+    E: 'static,
+    R: 'static + Send,
 {
     fn stop(self: Box<Self>) {
         (*self).stop()
@@ -1517,7 +1524,11 @@ impl EnginesResourceInfo {
     pub fn update(&self, _now: Instant) {
         let mut normalized_pending_bytes = 0;
 
-        fn fetch_engine_cf(engine: &engine_rocks::RocksEngine, cf: &str, normalized_pending_bytes: &mut u32) {
+        fn fetch_engine_cf(
+            engine: &engine_rocks::RocksEngine,
+            cf: &str,
+            normalized_pending_bytes: &mut u32,
+        ) {
             if let Ok(cf_opts) = engine.get_options_cf(cf) {
                 if let Ok(Some(b)) = engine.get_cf_pending_compaction_bytes(cf) {
                     if cf_opts.get_soft_pending_compaction_bytes_limit() > 0 {
@@ -1532,7 +1543,11 @@ impl EnginesResourceInfo {
             }
         }
 
-        fn fetch_engine_cf_tiflash(engine: &RocksEngine, cf: &str, normalized_pending_bytes: &mut u32) {
+        fn fetch_engine_cf_tiflash(
+            engine: &RocksEngine,
+            cf: &str,
+            normalized_pending_bytes: &mut u32,
+        ) {
             if let Ok(cf_opts) = engine.get_options_cf(cf) {
                 if let Ok(Some(b)) = engine.get_cf_pending_compaction_bytes(cf) {
                     if cf_opts.get_soft_pending_compaction_bytes_limit() > 0 {

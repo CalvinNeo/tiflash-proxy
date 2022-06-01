@@ -11,9 +11,14 @@ use kvproto::raft_serverpb::{self, RaftMessage};
 use raft::eraftpb::MessageType;
 use raft::SnapshotStatus;
 
-use test_raftstore::Config;
+use crate::mock_cluster::{create_tiflash_test_engine, Cluster};
+use crate::transport_simulate::{Filter, SimulateTransport};
+use crate::{Simulator, TestPdClient};
+use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
+use engine_rocks::RocksSnapshot;
+use engine_traits::KvEngine;
 use engine_traits::{Engines, MiscExt, Peekable};
 use raftstore::coprocessor::config::SplitCheckConfigManager;
 use raftstore::coprocessor::CoprocessorHost;
@@ -26,26 +31,26 @@ use raftstore::store::SnapManagerBuilder;
 use raftstore::store::*;
 use raftstore::Result;
 use resource_metering::CollectorRegHandle;
+use test_raftstore::Config;
 use tikv::config::{ConfigController, Module};
 use tikv::import::SSTImporter;
 use tikv::server::raftkv::ReplicaReadLockChecker;
 use tikv::server::Node;
 use tikv::server::Result as ServerResult;
+use tikv_util::box_err;
 use tikv_util::config::VersionTrack;
 use tikv_util::time::ThreadReadId;
 use tikv_util::worker::{Builder as WorkerBuilder, LazyWorker};
-use engine_traits::KvEngine;
-use engine_rocks::RocksSnapshot;
-use crate::{Simulator, TestPdClient};
-use crate::mock_cluster::{Cluster, create_tiflash_test_engine};
-use tikv_util::box_err;
 use tikv_util::{debug, defer};
-use crate::transport_simulate::{SimulateTransport, Filter};
-use collections::{HashMap, HashSet};
 
 pub struct ChannelTransportCore {
     snap_paths: HashMap<u64, (SnapManager, TempDir)>,
-    routers: HashMap<u64, SimulateTransport<ServerRaftStoreRouter<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>>>,
+    routers: HashMap<
+        u64,
+        SimulateTransport<
+            ServerRaftStoreRouter<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>,
+        >,
+    >,
 }
 
 #[derive(Clone)]
@@ -151,7 +156,8 @@ pub struct NodeCluster {
     simulate_trans: HashMap<u64, SimulateChannelTransport>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
     #[allow(clippy::type_complexity)]
-    post_create_coprocessor_host: Option<Box<dyn Fn(u64, &mut CoprocessorHost<engine_tiflash::RocksEngine>)>>,
+    post_create_coprocessor_host:
+        Option<Box<dyn Fn(u64, &mut CoprocessorHost<engine_tiflash::RocksEngine>)>>,
     pub importer: Option<Arc<SSTImporter>>,
 }
 
@@ -176,7 +182,9 @@ impl NodeCluster {
     pub fn get_node_router(
         &self,
         node_id: u64,
-    ) -> SimulateTransport<ServerRaftStoreRouter<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>> {
+    ) -> SimulateTransport<
+        ServerRaftStoreRouter<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>,
+    > {
         self.trans
             .core
             .lock()
@@ -201,7 +209,8 @@ impl NodeCluster {
     pub fn get_node(
         &mut self,
         node_id: u64,
-    ) -> Option<&mut Node<TestPdClient, engine_tiflash::RocksEngine, engine_rocks::RocksEngine>> {
+    ) -> Option<&mut Node<TestPdClient, engine_tiflash::RocksEngine, engine_rocks::RocksEngine>>
+    {
         self.nodes.get_mut(&node_id)
     }
 
@@ -226,6 +235,8 @@ impl Simulator<engine_tiflash::RocksEngine> for NodeCluster {
         system: RaftBatchSystem<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>,
     ) -> ServerResult<u64> {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
+        assert_ne!(engines.kv.engine_store_server_helper, 0);
+
         let pd_worker = LazyWorker::new("test-pd-worker");
 
         let simulate_trans = SimulateTransport::new(self.trans.clone());
@@ -279,7 +290,6 @@ impl Simulator<engine_tiflash::RocksEngine> for NodeCluster {
             f(node_id, &mut coprocessor_host);
         }
 
-        assert_ne!(engines.kv.engine_store_server_helper, 0);
         let tiflash_ob = engine_store_ffi::observer::TiFlashObserver::new(
             engines.kv.clone(),
             importer.clone(),
@@ -316,13 +326,11 @@ impl Simulator<engine_tiflash::RocksEngine> for NodeCluster {
             cm,
             CollectorRegHandle::new_for_test(),
         )?;
-        assert!(
-            engines
-                .kv
-                .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
-                .unwrap()
-                .is_none()
-        );
+        assert!(engines
+            .kv
+            .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
+            .unwrap()
+            .is_none());
         assert!(node_id == 0 || node_id == node.id());
 
         let node_id = node.id();
@@ -482,7 +490,10 @@ impl Simulator<engine_tiflash::RocksEngine> for NodeCluster {
         trans.routers.get_mut(&node_id).unwrap().clear_filters();
     }
 
-    fn get_router(&self, node_id: u64) -> Option<RaftRouter<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>> {
+    fn get_router(
+        &self,
+        node_id: u64,
+    ) -> Option<RaftRouter<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>> {
         self.nodes.get(&node_id).map(|node| node.get_router())
     }
 }

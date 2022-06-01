@@ -1,34 +1,34 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_store_ffi::{KVGetStatus, RaftStoreProxyFFI};
-use std::sync::{Arc, RwLock};
-use test_raftstore::{TestPdClient, must_get_equal, must_get_none, new_peer};
 use mock_engine_store::node::NodeCluster;
 use mock_engine_store::server::ServerCluster;
 use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
+use test_raftstore::{must_get_equal, must_get_none, new_peer, TestPdClient};
 
 extern crate rocksdb;
-use ::rocksdb::{DB};
+use crate::normal::rocksdb::Writable;
+use ::rocksdb::DB;
+use engine_store_ffi::config::ensure_no_common_unrecognized_keys;
+use engine_tiflash::*;
+use engine_traits::Iterable;
 use engine_traits::Iterator;
+use engine_traits::MiscExt;
+use engine_traits::Peekable;
 use engine_traits::SeekKey;
 use engine_traits::{Error, Result};
 use engine_traits::{ExternalSstFileInfo, SstExt, SstReader, SstWriter, SstWriterBuilder};
-use engine_tiflash::*;
-use engine_traits::Iterable;
-use engine_traits::Peekable;
-use engine_traits::{CF_RAFT, CF_LOCK, CF_WRITE, CF_DEFAULT};
-use crate::normal::rocksdb::Writable;
-use kvproto::raft_serverpb::{RegionLocalState, RaftApplyState, StoreIdent};
-use std::io::{self, Write, Read};
-use tikv::config::TiKvConfig;
-use engine_store_ffi::config::ensure_no_common_unrecognized_keys;
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use kvproto::raft_serverpb::{RaftApplyState, RegionLocalState, StoreIdent};
 use pd_client::PdClient;
-use tikv_util::config::{LogFormat, ReadableDuration, ReadableSize};
-use std::sync::Once;
-use tikv_util::HandyRwLock;
 use sst_importer::SSTImporter;
+use std::io::{self, Read, Write};
 use std::path::Path;
-use engine_traits::MiscExt;
+use std::sync::Once;
+use tikv::config::TiKvConfig;
+use tikv_util::config::{LogFormat, ReadableDuration, ReadableSize};
+use tikv_util::HandyRwLock;
 
 #[test]
 fn test_config() {
@@ -38,22 +38,23 @@ fn test_config() {
     let path = file.path();
 
     let mut unrecognized_keys = Vec::new();
-    let mut config = TiKvConfig::from_file(
-        path,
-        Some(&mut unrecognized_keys)
-    ).unwrap();
+    let mut config = TiKvConfig::from_file(path, Some(&mut unrecognized_keys)).unwrap();
     assert_eq!(config.memory_usage_high_water, 0.65);
     assert_eq!(config.rocksdb.max_open_files, 111);
     assert_eq!(unrecognized_keys.len(), 3);
 
     let mut proxy_unrecognized_keys = Vec::new();
-    let proxy_config = engine_store_ffi::config::ProxyConfig::from_file(
-        path,
-        Some(&mut proxy_unrecognized_keys)
-    ).unwrap();
+    let proxy_config =
+        engine_store_ffi::config::ProxyConfig::from_file(path, Some(&mut proxy_unrecognized_keys))
+            .unwrap();
     assert_eq!(proxy_config.snap_handle_pool_size, 4);
-    let unknown = ensure_no_common_unrecognized_keys(&vec!["a.b", "b"].iter().map(|e| String::from(*e)).collect(),
-                                                     &vec!["a.b", "b.b", "c"].iter().map(|e| String::from(*e)).collect());
+    let unknown = ensure_no_common_unrecognized_keys(
+        &vec!["a.b", "b"].iter().map(|e| String::from(*e)).collect(),
+        &vec!["a.b", "b.b", "c"]
+            .iter()
+            .map(|e| String::from(*e))
+            .collect(),
+    );
     assert_eq!(unknown.is_err(), true);
     assert_eq!(unknown.unwrap_err(), "a.b, b.b");
     let unknown = ensure_no_common_unrecognized_keys(&proxy_unrecognized_keys, &unrecognized_keys);
@@ -64,10 +65,7 @@ fn test_config() {
     server::setup::validate_and_persist_config(&mut config, true);
 
     // Will not override ProxyConfig
-    let proxy_config_new = engine_store_ffi::config::ProxyConfig::from_file(
-        path,
-        None
-    ).unwrap();
+    let proxy_config_new = engine_store_ffi::config::ProxyConfig::from_file(path, None).unwrap();
     assert_eq!(proxy_config_new.snap_handle_pool_size, 4);
 }
 
@@ -85,7 +83,11 @@ fn test_store_setup() {
     let store_id = cluster.raw.engines.keys().last().unwrap();
     let store = pd_client.get_store(*store_id).unwrap();
     println!("store {:?}", store);
-    assert!(store.get_labels().iter().find(|&x| x.key == "engine" && x.value == "tiflash").is_some());
+    assert!(store
+        .get_labels()
+        .iter()
+        .find(|&x| x.key == "engine" && x.value == "tiflash")
+        .is_some());
 
     cluster.raw.shutdown();
 }
@@ -133,7 +135,7 @@ fn test_normal() {
         };
         prev_apply_state.insert(*id, apply_state);
 
-        match engine.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY){
+        match engine.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY) {
             Ok(Some(_)) => (),
             _ => unreachable!(),
         };
@@ -153,7 +155,8 @@ fn test_normal() {
             let mut locked = cluster.ffi_helper_set.lock().unwrap();
             let mocker = locked.get_mut().get(&id).unwrap();
             let region = mocker.engine_store_server.kvstore.get(&region_id).unwrap();
-            let bmap = &region.data[engine_store_ffi::interfaces::root::DB::ColumnFamilyType::Default as usize];
+            let bmap = &region.data
+                [engine_store_ffi::interfaces::root::DB::ColumnFamilyType::Default as usize];
             let ks = k.as_bytes().to_vec();
             println!("!!!! open H {} ks {:?}", id, ks);
             assert!(bmap.get(&ks).is_some());
@@ -254,9 +257,7 @@ fn test_huge_snapshot() {
 
     // Disable default max peer count check.
     pd_client.disable_default_operator();
-
-    let _ = cluster.start();
-    let r1 = 1;
+    let r1 = cluster.run_conf_change();
 
     let first_value = vec![0; 10240];
     // at least 4m data
@@ -267,16 +268,18 @@ fn test_huge_snapshot() {
     let first_key: &[u8] = b"000";
 
     let eng_ids = cluster.raw.engines.iter().map(|e| e.0).collect::<Vec<_>>();
-
+    tikv_util::info!("engine_2 is {}", *eng_ids[1]);
     let engine_2 = cluster.raw.get_engine(*eng_ids[1]);
     must_get_none(&engine_2, first_key);
-    // add peer (2,2) to region 1.
+    // add peer (engine_2,engine_2) to region 1.
     pd_client.must_add_peer(r1, new_peer(*eng_ids[1], *eng_ids[1]));
 
     let (key, value) = (b"k2", b"v2");
     cluster.raw.must_put(key, value);
     assert_eq!(cluster.raw.get(key), Some(value.to_vec()));
     must_get_equal(&engine_2, key, value);
+    // now snapshot must be applied on peer engine_2;
+    must_get_equal(&engine_2, first_key, first_value.as_slice());
 
     cluster.raw.shutdown();
 }

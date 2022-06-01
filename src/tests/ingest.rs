@@ -1,20 +1,20 @@
 use engine_store_ffi::{KVGetStatus, RaftStoreProxyFFI};
-use std::sync::{Arc, RwLock};
-use test_raftstore::{TestPdClient, must_get_equal, must_get_none};
 use mock_engine_store::node::NodeCluster;
 use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
+use test_raftstore::{must_get_equal, must_get_none, TestPdClient};
 
 extern crate rocksdb;
-use ::rocksdb::{DB};
+use ::rocksdb::DB;
+use engine_tiflash::*;
+use engine_traits::Iterable;
 use engine_traits::Iterator;
+use engine_traits::Peekable;
 use engine_traits::SeekKey;
 use engine_traits::{Error, Result};
 use engine_traits::{ExternalSstFileInfo, SstExt, SstReader, SstWriter, SstWriterBuilder};
-use engine_tiflash::*;
-use engine_traits::Iterable;
-use engine_traits::Peekable;
-use engine_traits::{CF_RAFT, CF_LOCK, CF_WRITE, CF_DEFAULT};
-use kvproto::raft_serverpb::{RegionLocalState, RaftApplyState, StoreIdent};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use kvproto::raft_serverpb::{RaftApplyState, RegionLocalState, StoreIdent};
 
 use std::{fs::File, time::Duration};
 
@@ -25,4 +25,3 @@ use kvproto::kvrpcpb::*;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request};
 use tempfile::Builder;
 use tikv_util::HandyRwLock;
-
