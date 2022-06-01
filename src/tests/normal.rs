@@ -97,6 +97,44 @@ fn test_store_setup() {
     cluster.raw.shutdown();
 }
 
+fn check_key(cluster: &mock_engine_store::mock_cluster::Cluster<NodeCluster>, k: &[u8], v: &[u8], in_mem: Option<bool>, in_disk: Option<bool>) {
+    let region_id = cluster.raw.get_region(k).get_id();
+    for id in cluster.raw.engines.keys() {
+        let engine = &cluster.raw.get_engine(*id);
+
+        match in_disk {
+            Some(b) => {
+                if b {
+                    must_get_equal(engine, k, v);
+                } else {
+                    must_get_none(engine, k);
+                }
+            },
+            None => ()
+        };
+
+        let mut lock = cluster
+            .ffi_helper_set.lock().unwrap();
+        let v = lock.get_mut().get(id).unwrap()
+            .engine_store_server
+            .get_mem(region_id,mock_engine_store::ffi_interfaces::ColumnFamilyType::Default, &k.to_vec());
+
+        match in_mem {
+            Some(b) => {
+                if b {
+                    if v.is_none() {
+                        tikv_util::debug!("!!!! fail {:?} {:?}", k, v);
+                    }
+                    assert!(v.is_some());
+                } else {
+                    assert!(v.is_none());
+                }
+            },
+            None => ()
+        };
+    }
+}
+
 #[test]
 fn test_normal() {
     let pd_client = Arc::new(TestPdClient::new(0, false));
@@ -158,19 +196,38 @@ fn test_normal() {
     for i in 10..20 {
         let k = format!("k{}", i);
         let v = format!("v{}", i);
+        check_key(&cluster, k.as_bytes(), v.as_bytes(), Some(true), Some(false));
+    }
 
-        let region_id = cluster.raw.get_region(k.as_bytes()).get_id();
-        for id in cluster.raw.engines.keys() {
-            let engine = &cluster.raw.get_engine(*id);
-            // must_get_equal(engine, k.as_bytes(), v.as_bytes());
-            // We can get in mem
-            let mut lock = cluster
-                .ffi_helper_set.lock().unwrap();
-            let v = lock.get_mut().get(id).unwrap()
-                .engine_store_server
-                .get_mem(region_id,mock_engine_store::ffi_interfaces::ColumnFamilyType::Default, &k.as_bytes().to_vec());
-            assert!(v.is_some());
-        }
+    fail::remove("on_handle_admin_raft_cmd_no_persist");
+
+    for i in 20..30 {
+        let k = format!("k{}", i);
+        let v = format!("v{}", i);
+        cluster.raw.must_put(k.as_bytes(), v.as_bytes());
+    }
+
+    for i in 11..30 {
+        let k = format!("k{}", i);
+        let v = format!("v{}", i);
+        check_key(&cluster, k.as_bytes(), v.as_bytes(), Some(true), None);
+    }
+
+    // Force a compact log to persist
+    let region_r = cluster.raw.get_region("k1".as_bytes());
+    let region_id = region_r.get_id();
+    let compact_log = test_raftstore::new_compact_log_request(100, 10);
+    let req = test_raftstore::new_admin_request(region_id, region_r.get_region_epoch(), compact_log);
+    let res = cluster
+        .raw
+        .call_command_on_leader(req, Duration::from_secs(3))
+        .unwrap();
+    assert!(res.get_header().has_error(), "{:?}", res);
+
+    for i in 11..30 {
+        let k = format!("k{}", i);
+        let v = format!("v{}", i);
+        check_key(&cluster, k.as_bytes(), v.as_bytes(), Some(true), Some(true));
     }
 
     for id in cluster.raw.engines.keys() {
@@ -183,13 +240,9 @@ fn test_normal() {
             Ok(Some(s)) => s,
             _ => unreachable!(),
         };
-
-        // assert_eq!(&apply_state, prev_apply_state.get(&id).unwrap());
     }
 
     // get RegionLocalState through ffi
-    let k = "k1".as_bytes();
-    let region_id = cluster.raw.get_region(k).get_id();
     unsafe {
         for (_, ffi_set) in cluster.ffi_helper_set.lock().unwrap().get_mut().iter_mut() {
             let f = ffi_set.proxy_helper.fn_get_region_local_state.unwrap();
