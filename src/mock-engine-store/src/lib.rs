@@ -62,9 +62,6 @@ impl EngineStoreServer {
     pub fn get_mem(&self, region_id: u64, cf: ffi_interfaces::ColumnFamilyType, key: &Vec<u8>) -> Option<&Vec<u8>> {
         let region = self.kvstore.get(&region_id).unwrap();
         let bmap = &region.data[cf as usize];
-        for (k, v) in bmap.iter() {
-            debug!("!!!! get mem {:?}", k);
-        }
         bmap.get(key)
     }
 }
@@ -104,10 +101,8 @@ impl EngineStoreServerWrap {
             match req.get_cmd_type() {
                 AdminCmdType::CompactLog => {
                     fail::fail_point!("on_handle_admin_raft_cmd_no_persist", |_| {
-                        info!("!!!!! HAVE NONE");
                         ffi_interfaces::EngineStoreApplyRes::None
                     });
-                    info!("!!!!! HAVE PERSIST");
                     ffi_interfaces::EngineStoreApplyRes::Persist
                 },
                 _ => {
@@ -127,7 +122,6 @@ impl EngineStoreServerWrap {
             }
         };
 
-        info!("!!!!! IS {:?}", res);
         // We must have this region now.
         let region = (*self.engine_store_server).kvstore.get_mut(&region_id).unwrap();
         match res {
@@ -517,7 +511,6 @@ struct PrehandledSnapshot {
 }
 
 fn write_kv_in_mem(region: &mut Box<Region>, cf_index: usize, k: &[u8], v: &[u8]) {
-    tikv_util::debug!("!!!! write_kv_in_mem {:?} {:?}", &k, &v);
     let data = &mut region.data[cf_index];
     let pending_delete = &mut region.pending_delete[cf_index];
     let pending_write = &mut region.pending_write[cf_index];
