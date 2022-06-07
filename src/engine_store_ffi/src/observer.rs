@@ -24,6 +24,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use tikv_util::{error, info, warn, debug};
 use yatp::pool::{Builder, ThreadPool};
 use yatp::task::future::TaskCell;
+use std::ops::{Deref, DerefMut};
 
 pub struct PtrWrapper(crate::RawCppPtr);
 
@@ -47,6 +48,7 @@ impl PrehandleTask {
 }
 
 pub struct TiFlashObserver {
+    pub peer_id: u64,
     pub engine_store_server_helper: &'static crate::EngineStoreServerHelper,
     pub engine: engine_tiflash::RocksEngine,
     pub sst_importer: Arc<SSTImporter>,
@@ -57,6 +59,7 @@ pub struct TiFlashObserver {
 impl Clone for TiFlashObserver {
     fn clone(&self) -> Self {
         TiFlashObserver {
+            peer_id: self.peer_id,
             engine_store_server_helper: self.engine_store_server_helper,
             engine: self.engine.clone(),
             sst_importer: self.sst_importer.clone(),
@@ -71,6 +74,7 @@ const TIFLASH_OBSERVER_PRIORITY: u32 = 0;
 
 impl TiFlashObserver {
     pub fn new(
+        peer_id: u64,
         engine: engine_tiflash::RocksEngine,
         sst_importer: Arc<SSTImporter>,
         snap_handle_pool_size: usize,
@@ -81,6 +85,7 @@ impl TiFlashObserver {
         let engine_store_server_helper =
             crate::gen_engine_store_server_helper(engine.engine_store_server_helper);
         TiFlashObserver {
+            peer_id,
             engine_store_server_helper,
             engine,
             sst_importer,
@@ -362,17 +367,28 @@ impl TiFlashObserver {
                 .iter()
                 .map(|(b, c)| (b.to_str().unwrap().as_bytes(), c.clone()))
                 .collect();
+
+            info!("sleep begin");
+            let ten_sec = std::time::Duration::from_millis(2000);
+            std::thread::sleep(ten_sec);
+            info!("sleep end");
             let s = engine_store_server_helper.pre_handle_snapshot(&r, peer_id, views, idx, term);
             sender.send(Some(PtrWrapper(s)));
         });
 
         let e = Arc::new(Mutex::new(PrehandleTask::new(receiver)));
-        self.pre_handle_snapshot_ctx
+
+        let locked = self.pre_handle_snapshot_ctx
             .lock()
-            .unwrap()
-            .borrow_mut()
-            .tracer
-            .insert(snap_key.clone(), e.clone());
+            .unwrap();
+
+        let mut b = locked
+            .borrow_mut();
+
+        b.tracer.insert(snap_key.clone(), e.clone());
+
+        info!("!!!!! tracer len push {} {} {}", b.tracer.len(), self.peer_id, b.deref() as *const PrehandleContext as usize);
+        assert!(b.tracer.len() <= 1);
     }
 }
 
@@ -387,6 +403,7 @@ impl ApplySnapshotObserver for TiFlashObserver {
         fail::fail_point!("on_ob_pre_handle_snapshot", |_| {});
         let mut sst_views = vec![];
         for cf_file in ssts {
+            // cf_file will be changed by dynamic region.
             if cf_file.size == 0 {
                 // Skip empty cf file.
                 continue;
@@ -409,7 +426,7 @@ impl ApplySnapshotObserver for TiFlashObserver {
     ) {
         fail::fail_point!("on_ob_post_apply_snapshot", |_| {});
         let ctx = self.pre_handle_snapshot_ctx.lock().unwrap();
-        let b = ctx.borrow_mut();
+        let mut b = ctx.borrow_mut();
         match b.tracer.get(snap_key) {
             Some(t) => {
                 let retry = match t.lock().unwrap().recv.recv() {
@@ -432,5 +449,7 @@ impl ApplySnapshotObserver for TiFlashObserver {
                 panic!("Can not get snapshot of {:?}", snap_key);
             }
         }
+        b.tracer.remove(snap_key);
+        info!("!!!!! tracer len remove {} {} {}", b.tracer.len(), self.peer_id, b.deref() as *const PrehandleContext as usize);
     }
 }

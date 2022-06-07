@@ -291,6 +291,7 @@ impl Simulator<engine_tiflash::RocksEngine> for NodeCluster {
         }
 
         let tiflash_ob = engine_store_ffi::observer::TiFlashObserver::new(
+            node_id,
             engines.kv.clone(),
             importer.clone(),
             2,

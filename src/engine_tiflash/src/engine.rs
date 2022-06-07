@@ -113,6 +113,10 @@ impl KvEngine for RocksEngine {
         let e: &dyn Any = &self.rocks.db;
         e.downcast_ref().expect("bad engine downcast")
     }
+
+    fn can_apply_snapshot(&self) -> bool {
+        false
+    }
 }
 
 impl Iterable for RocksEngine {
