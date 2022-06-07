@@ -3,7 +3,9 @@
 use std::any::Any;
 use std::fs;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, mpsc};
+use std::cell::RefCell;
+use std::collections::HashMap;
 
 use engine_traits::{
     Error, IterOptions, Iterable, KvEngine, Peekable, ReadOptions, Result, SyncMutable,
@@ -21,15 +23,43 @@ use engine_rocks::rocks_metrics_defs::{
 };
 use engine_rocks::util::get_cf_handle;
 use engine_rocks::{RocksEngineIterator, RocksSnapshot};
+use yatp::pool::{Builder, ThreadPool};
+use yatp::task::future::TaskCell;
+use std::collections::hash_map::RandomState;
+use raftstore::store::SnapKey;
+use std::fmt::Formatter;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct RocksEngine {
     // Must ensure rocks is the first field, for RocksEngine::from_ref
     pub rocks: engine_rocks::RocksEngine,
     pub engine_store_server_helper: isize,
+    pub apply_snap_pool: Option<Arc<ThreadPool<TaskCell>>>,
+    pub pool_capacity: usize,
+    pub pending_applies_count: Arc<AtomicUsize>,
+}
+
+impl std::fmt::Debug for RocksEngine {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TiFlashEngine")
+            .field("rocks", &self.rocks)
+            .field("engine_store_server_helper", &self.engine_store_server_helper)
+            .finish()
+    }
 }
 
 impl RocksEngine {
+    pub fn init(&mut self, engine_store_server_helper: isize, snap_handle_pool_size: usize) {
+        self.engine_store_server_helper = engine_store_server_helper;
+        let snap_pool = Builder::new(tikv_util::thd_name!("region-task"))
+            .max_thread_count(snap_handle_pool_size)
+            .build_future_pool();
+        self.apply_snap_pool = Some(Arc::new(snap_pool));
+        self.pool_capacity = snap_handle_pool_size;
+        self.pending_applies_count.store(0, Ordering::Relaxed);
+    }
+
     pub fn from_db(db: Arc<DB>) -> Self {
         RocksEngine {
             rocks: engine_rocks::RocksEngine {
@@ -37,6 +67,9 @@ impl RocksEngine {
                 shared_block_cache: false,
             },
             engine_store_server_helper: 0,
+            apply_snap_pool: None,
+            pool_capacity: 0,
+            pending_applies_count: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -115,7 +148,10 @@ impl KvEngine for RocksEngine {
     }
 
     fn can_apply_snapshot(&self) -> bool {
-        false
+        // Is called after calling observer's pre_handle_snapshot
+        let in_queue = self.pending_applies_count.load(Ordering::Relaxed);
+        tikv_util::debug!("!!!!! pending_applies_count {} cap {}", in_queue, self.pool_capacity);
+        in_queue > self.pool_capacity
     }
 }
 

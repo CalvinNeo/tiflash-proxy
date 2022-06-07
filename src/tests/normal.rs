@@ -34,6 +34,7 @@ use mock_engine_store::transport_simulate::{CloneFilterFactory, RegionPacketFilt
 use tikv_util::time::Duration;
 use raft::eraftpb::MessageType;
 use mock_engine_store::transport_simulate::Direction;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[test]
 fn test_config() {
@@ -136,7 +137,7 @@ fn check_key(cluster: &mock_engine_store::mock_cluster::Cluster<NodeCluster>, k:
 }
 
 #[test]
-fn test_normal() {
+fn test_kv_write() {
     let pd_client = Arc::new(TestPdClient::new(0, false));
     let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
     let mut cluster = mock_engine_store::mock_cluster::Cluster::new(0, 3, sim, pd_client);
@@ -242,6 +243,26 @@ fn test_normal() {
         };
     }
 
+    fail::remove("on_handle_admin_raft_cmd_no_persist");
+    cluster.raw.shutdown();
+}
+
+#[test]
+fn test_get_region_local_state() {
+    let pd_client = Arc::new(TestPdClient::new(0, false));
+    let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
+    let mut cluster = mock_engine_store::mock_cluster::Cluster::new(0, 3, sim, pd_client);
+
+    cluster.start();
+
+    let k = b"k1";
+    let v = b"v1";
+    cluster.raw.must_put(k, v);
+    for id in cluster.raw.engines.keys() {
+        must_get_equal(&cluster.raw.get_engine(*id), k, v);
+    }
+    let region_id = cluster.raw.get_region(k).get_id();
+
     // get RegionLocalState through ffi
     unsafe {
         for (_, ffi_set) in cluster.ffi_helper_set.lock().unwrap().get_mut().iter_mut() {
@@ -305,7 +326,6 @@ fn test_normal() {
         }
     }
 
-    fail::remove("on_handle_admin_raft_cmd_no_persist");
     cluster.raw.shutdown();
 }
 
@@ -366,7 +386,7 @@ fn test_huge_snapshot() {
 }
 
 
-#[test]
+// #[test]
 fn test_multiple_snapshot() {
     let pd_client = Arc::new(TestPdClient::new(0, false));
     let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
@@ -382,7 +402,7 @@ fn test_multiple_snapshot() {
     cluster.raw.must_put(b"k1", b"v1");
 }
 
-#[test]
+// #[test]
 fn test_concurrent_snapshot() {
     let pd_client = Arc::new(TestPdClient::new(0, false));
     let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
@@ -453,9 +473,14 @@ fn test_concurrent_snapshot2() {
     // cluster.raw.must_transfer_leader(r1, new_peer(1, 1));
     // cluster.raw.must_transfer_leader(r3, new_peer(1, 1));
 
+    fail::cfg("before_actually_pre_handle", "sleep(1000)");
     tikv_util::info!("region k1 {} k3 {}", r1, r3);
     pd_client.add_peer(r1, new_peer(2, 2));
     pd_client.add_peer(r3, new_peer(2, 2));
+    std::thread::sleep(std::time::Duration::from_millis(500));
 
-    std::thread::sleep(std::time::Duration::from_millis(5000));
+    let pending_count = cluster.raw.engines.get(&2).unwrap().kv.pending_applies_count.clone();
+    assert_eq!(pending_count.load(Ordering::Relaxed), 2);
+    std::thread::sleep(std::time::Duration::from_millis(1000));
+    assert_eq!(pending_count.load(Ordering::Relaxed), 0);
 }

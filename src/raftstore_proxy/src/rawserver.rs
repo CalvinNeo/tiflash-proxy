@@ -814,7 +814,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             node.id(),
             self.engines.as_ref().unwrap().engines.kv.clone(),
             importer.clone(),
-            snap_handle_pool_size,
         );
         tiflash_ob.register_to(self.coprocessor_host.as_mut().unwrap());
 

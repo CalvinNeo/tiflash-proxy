@@ -19,7 +19,7 @@ use sst_importer::SSTImporter;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use tikv_util::{error, info, warn, debug};
 use yatp::pool::{Builder, ThreadPool};
@@ -31,12 +31,13 @@ pub struct PtrWrapper(crate::RawCppPtr);
 unsafe impl Send for PtrWrapper {}
 unsafe impl Sync for PtrWrapper {}
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct PrehandleContext {
     // tracer holds ptr of snapshot prehandled by TiFlash side.
     pub tracer: HashMap<SnapKey, Arc<Mutex<PrehandleTask>>>,
 }
 
+#[derive(Debug)]
 pub struct PrehandleTask {
     pub recv: mpsc::Receiver<Option<PtrWrapper>>,
 }
@@ -52,7 +53,6 @@ pub struct TiFlashObserver {
     pub engine_store_server_helper: &'static crate::EngineStoreServerHelper,
     pub engine: engine_tiflash::RocksEngine,
     pub sst_importer: Arc<SSTImporter>,
-    pub apply_snap_pool: Arc<ThreadPool<TaskCell>>,
     pub pre_handle_snapshot_ctx: Arc<Mutex<RefCell<PrehandleContext>>>,
 }
 
@@ -63,7 +63,6 @@ impl Clone for TiFlashObserver {
             engine_store_server_helper: self.engine_store_server_helper,
             engine: self.engine.clone(),
             sst_importer: self.sst_importer.clone(),
-            apply_snap_pool: self.apply_snap_pool.clone(),
             pre_handle_snapshot_ctx: self.pre_handle_snapshot_ctx.clone(),
         }
     }
@@ -77,11 +76,7 @@ impl TiFlashObserver {
         peer_id: u64,
         engine: engine_tiflash::RocksEngine,
         sst_importer: Arc<SSTImporter>,
-        snap_handle_pool_size: usize,
     ) -> Self {
-        let snap_pool = Builder::new(tikv_util::thd_name!("region-task"))
-            .max_thread_count(snap_handle_pool_size)
-            .build_future_pool();
         let engine_store_server_helper =
             crate::gen_engine_store_server_helper(engine.engine_store_server_helper);
         TiFlashObserver {
@@ -89,7 +84,6 @@ impl TiFlashObserver {
             engine_store_server_helper,
             engine,
             sst_importer,
-            apply_snap_pool: Arc::new(snap_pool),
             pre_handle_snapshot_ctx: Arc::new(Mutex::new(
                 RefCell::new(PrehandleContext::default()),
             )),
@@ -308,7 +302,7 @@ impl AdminObserver for TiFlashObserver {
 
         // TODO revert ApplyState for CompactLog
 
-        // TODO set region for merge ops
+        // TODO set region for all split/merge ops
 
         let flash_res = {
             self.engine_store_server_helper.handle_admin_raft_cmd(
@@ -362,19 +356,18 @@ impl TiFlashObserver {
         let engine_store_server_helper = self.engine_store_server_helper;
         let r = region.clone();
         let v = sst_views.clone();
-        self.apply_snap_pool.spawn(async move {
+        self.engine.apply_snap_pool.as_ref().unwrap().spawn(async move {
             let views = sst_views
                 .iter()
                 .map(|(b, c)| (b.to_str().unwrap().as_bytes(), c.clone()))
                 .collect();
 
-            info!("sleep begin");
-            let ten_sec = std::time::Duration::from_millis(2000);
-            std::thread::sleep(ten_sec);
-            info!("sleep end");
+            fail::fail_point!("before_actually_pre_handle", |_| {});
             let s = engine_store_server_helper.pre_handle_snapshot(&r, peer_id, views, idx, term);
             sender.send(Some(PtrWrapper(s)));
         });
+
+        self.engine.pending_applies_count.fetch_add(1, Ordering::Relaxed);
 
         let e = Arc::new(Mutex::new(PrehandleTask::new(receiver)));
 
@@ -388,7 +381,6 @@ impl TiFlashObserver {
         b.tracer.insert(snap_key.clone(), e.clone());
 
         info!("!!!!! tracer len push {} {} {}", b.tracer.len(), self.peer_id, b.deref() as *const PrehandleContext as usize);
-        assert!(b.tracer.len() <= 1);
     }
 }
 
@@ -429,7 +421,7 @@ impl ApplySnapshotObserver for TiFlashObserver {
         let mut b = ctx.borrow_mut();
         match b.tracer.get(snap_key) {
             Some(t) => {
-                let retry = match t.lock().unwrap().recv.recv() {
+                let need_retry = match t.lock().unwrap().recv.recv() {
                     Ok(snap_ptr) => match snap_ptr {
                         Some(s) => {
                             debug!("get prehandled snapshot success");
@@ -441,14 +433,16 @@ impl ApplySnapshotObserver for TiFlashObserver {
                     },
                     Err(_) => true,
                 };
-                if retry {
-                    panic!("get prehandled snapshot failed")
+                if need_retry {
+                    panic!("get prehandled snapshot failed, need prehandle again here")
                 }
             }
             None => {
                 panic!("Can not get snapshot of {:?}", snap_key);
             }
         }
+
+        self.engine.pending_applies_count.fetch_sub(1, Ordering::Relaxed);
         b.tracer.remove(snap_key);
         info!("!!!!! tracer len remove {} {} {}", b.tracer.len(), self.peer_id, b.deref() as *const PrehandleContext as usize);
     }

@@ -294,7 +294,6 @@ impl Simulator<engine_tiflash::RocksEngine> for NodeCluster {
             node_id,
             engines.kv.clone(),
             importer.clone(),
-            2,
         );
         tiflash_ob.register_to(&mut coprocessor_host);
 

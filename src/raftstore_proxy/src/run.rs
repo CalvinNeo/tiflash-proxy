@@ -64,7 +64,7 @@ pub fn init_tiflash_engines<CER: ConfiguredRaftEngine>(
 
     // engine_tiflash::RocksEngine has engine_rocks::RocksEngine inside
     let mut kv_engine = engine_tiflash::RocksEngine::from_db(Arc::new(kv_engine));
-    kv_engine.engine_store_server_helper = engine_store_server_helper;
+    kv_engine.init(engine_store_server_helper, tikv.proxy_config.snap_handle_pool_size);
     let engines = Engines::new(kv_engine, raft_engine);
 
     let cfg_controller = tikv.cfg_controller.as_mut().unwrap();

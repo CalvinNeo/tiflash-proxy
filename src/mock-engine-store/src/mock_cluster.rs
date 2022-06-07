@@ -360,6 +360,7 @@ pub fn create_tiflash_test_engine(
     );
 
     let mut engine = engine_tiflash::RocksEngine::from_db(engine);
+    engine.init(0, 2);
     let mut raft_engine = engine_rocks::RocksEngine::from_db(raft_engine);
     let shared_block_cache = cache.is_some();
     engine.set_shared_block_cache(shared_block_cache);
