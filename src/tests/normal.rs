@@ -98,6 +98,27 @@ fn test_store_setup() {
     cluster.raw.shutdown();
 }
 
+pub fn must_get_mem(engine_store_server: &Box<mock_engine_store::EngineStoreServer>, region_id: u64, key: &[u8], value: Option<&[u8]>) {
+    for _ in 1..300 {
+        let res = engine_store_server
+            .get_mem(region_id, mock_engine_store::ffi_interfaces::ColumnFamilyType::Default, &key.to_vec());
+
+        if let (Some(value), Some(res)) = (value, res) {
+            assert_eq!(value, &res[..]);
+            return;
+        }
+        if value.is_none() && res.is_none() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    panic!(
+        "can't get mem value {:?} for key {}",
+        value.map(tikv_util::escape),
+        log_wrappers::hex_encode_upper(key)
+    )
+}
+
 fn check_key(cluster: &mock_engine_store::mock_cluster::Cluster<NodeCluster>, k: &[u8], v: &[u8], in_mem: Option<bool>, in_disk: Option<bool>) {
     let region_id = cluster.raw.get_region(k).get_id();
     for id in cluster.raw.engines.keys() {
@@ -114,21 +135,17 @@ fn check_key(cluster: &mock_engine_store::mock_cluster::Cluster<NodeCluster>, k:
             None => ()
         };
 
-        let mut lock = cluster
-            .ffi_helper_set.lock().unwrap();
-        let v = lock.get_mut().get(id).unwrap()
-            .engine_store_server
-            .get_mem(region_id,mock_engine_store::ffi_interfaces::ColumnFamilyType::Default, &k.to_vec());
 
         match in_mem {
             Some(b) => {
+                let mut lock = cluster
+                    .ffi_helper_set.lock().unwrap();
+                let server = &lock.get_mut().get(id).unwrap()
+                    .engine_store_server;
                 if b {
-                    if v.is_none() {
-                        tikv_util::debug!("!!!! fail {:?} {:?}", k, v);
-                    }
-                    assert!(v.is_some());
+                    must_get_mem(server, region_id, k, Some(v));
                 } else {
-                    assert!(v.is_none());
+                    must_get_mem(server, region_id, k, None);
                 }
             },
             None => ()

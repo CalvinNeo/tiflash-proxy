@@ -60,9 +60,13 @@ impl EngineStoreServer {
     }
 
     pub fn get_mem(&self, region_id: u64, cf: ffi_interfaces::ColumnFamilyType, key: &Vec<u8>) -> Option<&Vec<u8>> {
-        let region = self.kvstore.get(&region_id).unwrap();
-        let bmap = &region.data[cf as usize];
-        bmap.get(key)
+        match self.kvstore.get(&region_id) {
+            Some(region) => {
+                let bmap = &region.data[cf as usize];
+                bmap.get(key)
+            },
+            None => None
+        }
     }
 }
 

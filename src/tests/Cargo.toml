@@ -85,3 +85,4 @@ env_logger = "0.8.4"
 test_util = { path = "../../contrib/tikv/components/test_util", default-features = false }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 collections = { path = "../../contrib/tikv/components/collections" }
+log_wrappers = { path = "../../contrib/tikv/components/log_wrappers" }

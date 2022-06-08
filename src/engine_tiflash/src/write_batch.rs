@@ -56,10 +56,15 @@ impl RocksWriteBatch {
 
 impl engine_traits::WriteBatch for RocksWriteBatch {
     fn write_opt(&self, opts: &WriteOptions) -> Result<()> {
-        let opt: RocksWriteOptions = opts.into();
-        self.get_db()
-            .write_opt(&self.wb, &opt.into_raw())
-            .map_err(Error::Engine)
+        if opts.from_kv() {
+            tikv_util::debug!("!!!!! write_opt {:?}", std::backtrace::Backtrace::capture());
+            Ok(())
+        } else {
+            let opt: RocksWriteOptions = opts.into();
+            self.get_db()
+                .write_opt(&self.wb, &opt.into_raw())
+                .map_err(Error::Engine)
+        }
     }
 
     fn data_size(&self) -> usize {
