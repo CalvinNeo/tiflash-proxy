@@ -56,15 +56,10 @@ impl RocksWriteBatch {
 
 impl engine_traits::WriteBatch for RocksWriteBatch {
     fn write_opt(&self, opts: &WriteOptions) -> Result<()> {
-        if opts.from_kv() {
-            tikv_util::debug!("!!!!! write_opt {:?}", std::backtrace::Backtrace::capture());
-            Ok(())
-        } else {
-            let opt: RocksWriteOptions = opts.into();
-            self.get_db()
-                .write_opt(&self.wb, &opt.into_raw())
-                .map_err(Error::Engine)
-        }
+        let opt: RocksWriteOptions = opts.into();
+        self.get_db()
+            .write_opt(&self.wb, &opt.into_raw())
+            .map_err(Error::Engine)
     }
 
     fn data_size(&self) -> usize {
@@ -80,7 +75,8 @@ impl engine_traits::WriteBatch for RocksWriteBatch {
     }
 
     fn should_write_to_engine(&self) -> bool {
-        self.count() > RocksEngine::WRITE_BATCH_MAX_KEYS
+        // Always not write to engine for kv
+        false
     }
 
     fn clear(&mut self) {

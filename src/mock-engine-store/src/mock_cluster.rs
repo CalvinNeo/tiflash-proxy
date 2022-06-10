@@ -148,6 +148,12 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
         )
     }
 
+    pub fn run(&mut self) {
+        self.raw.create_engines();
+        self.raw.bootstrap_region().unwrap();
+        self.start().unwrap();
+    }
+
     pub fn run_conf_change(&mut self) -> u64 {
         self.raw.create_engines();
         let region_id = self.raw.bootstrap_conf_change();

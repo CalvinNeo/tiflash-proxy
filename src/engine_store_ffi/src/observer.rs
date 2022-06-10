@@ -236,7 +236,7 @@ impl QueryObserver for TiFlashObserver {
                 };
         } else {
             let flash_res = {
-                info!("!!!! write haha {} {} {:?}", cmd.index, cmd.term, cmds);
+                info!("!!!! write cmds index {} term {} data {:?} peer_id {}", cmd.index, cmd.term, cmds, region_state.peer_id);
                 self.engine_store_server_helper.handle_write_raft_cmd(
                     &cmds,
                     RaftCmdHeader::new(ob_ctx.region().get_id(), cmd.index, cmd.term),
@@ -302,14 +302,35 @@ impl AdminObserver for TiFlashObserver {
 
         // TODO revert ApplyState for CompactLog
 
-        // TODO set region for all split/merge ops
+
+        let mut new_response = None;
+        match cmd_type {
+            AdminCmdType::CommitMerge | AdminCmdType::PrepareMerge
+                | AdminCmdType::RollbackMerge => {
+                let mut r = AdminResponse::default();
+                r.mut_split().set_left(region_state.modified_region.as_ref().unwrap().clone());
+                new_response = Some(r);
+            },
+            _ => (),
+        }
 
         let flash_res = {
-            self.engine_store_server_helper.handle_admin_raft_cmd(
-                &request,
-                &response,
-                RaftCmdHeader::new(ob_ctx.region().get_id(), cmd.index, cmd.term),
-            )
+            match new_response {
+                Some(r) => {
+                    self.engine_store_server_helper.handle_admin_raft_cmd(
+                        &request,
+                        &r,
+                        RaftCmdHeader::new(ob_ctx.region().get_id(), cmd.index, cmd.term),
+                    )
+                },
+                None => {
+                    self.engine_store_server_helper.handle_admin_raft_cmd(
+                        &request,
+                        &response,
+                        RaftCmdHeader::new(ob_ctx.region().get_id(), cmd.index, cmd.term),
+                    )
+                }
+            }
         };
         let persisted = match flash_res {
             EngineStoreApplyRes::None => {
@@ -392,6 +413,7 @@ impl ApplySnapshotObserver for TiFlashObserver {
         snap_key: &SnapKey,
         ssts: &[raftstore::store::snap::CfFile],
     ) {
+        info!("prehandle snapshot peer_id {}", peer_id);
         fail::fail_point!("on_ob_pre_handle_snapshot", |_| {});
         let mut sst_views = vec![];
         for cf_file in ssts {

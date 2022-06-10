@@ -148,10 +148,13 @@ impl KvEngine for RocksEngine {
     }
 
     fn can_apply_snapshot(&self) -> bool {
-        // Is called after calling observer's pre_handle_snapshot
+        // is called after calling observer's pre_handle_snapshot
         let in_queue = self.pending_applies_count.load(Ordering::Relaxed);
-        tikv_util::debug!("!!!!! pending_applies_count {} cap {}", in_queue, self.pool_capacity);
-        in_queue > self.pool_capacity
+        // if queue is full, we should begin to handle
+        let can = in_queue > self.pool_capacity;
+        fail::fail_point!("on_can_apply_snapshot", |e| e.unwrap().parse::<bool>().unwrap());
+        tikv_util::debug!("!!!!! pending_applies_count {} cap {} can {}", in_queue, self.pool_capacity, can);
+        can
     }
 }
 

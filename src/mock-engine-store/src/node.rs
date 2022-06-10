@@ -331,6 +331,7 @@ impl Simulator<engine_tiflash::RocksEngine> for NodeCluster {
             .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
             .unwrap()
             .is_none());
+
         assert!(node_id == 0 || node_id == node.id());
 
         let node_id = node.id();

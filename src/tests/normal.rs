@@ -113,9 +113,10 @@ pub fn must_get_mem(engine_store_server: &Box<mock_engine_store::EngineStoreServ
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     panic!(
-        "can't get mem value {:?} for key {}",
+        "can't get mem value {:?} for key {} in {}",
         value.map(tikv_util::escape),
-        log_wrappers::hex_encode_upper(key)
+        log_wrappers::hex_encode_upper(key),
+        engine_store_server.id,
     )
 }
 
@@ -135,7 +136,6 @@ fn check_key(cluster: &mock_engine_store::mock_cluster::Cluster<NodeCluster>, k:
             None => ()
         };
 
-
         match in_mem {
             Some(b) => {
                 let mut lock = cluster
@@ -153,6 +153,7 @@ fn check_key(cluster: &mock_engine_store::mock_cluster::Cluster<NodeCluster>, k:
     }
 }
 
+
 #[test]
 fn test_kv_write() {
     let pd_client = Arc::new(TestPdClient::new(0, false));
@@ -164,7 +165,7 @@ fn test_kv_write() {
     fail::cfg("on_handle_admin_raft_cmd_no_persist", "return").unwrap();
 
     // Try to start this node, return after persisted some keys.
-    let _ = cluster.start();
+    let _ = cluster.run();
 
     for i in 0..10 {
         let k = format!("k{}", i);
@@ -265,6 +266,101 @@ fn test_kv_write() {
 }
 
 #[test]
+fn test_compact_log() {
+
+}
+
+#[test]
+fn test_split_merge() {
+    let pd_client = Arc::new(TestPdClient::new(0, false));
+    let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
+    let mut cluster = mock_engine_store::mock_cluster::Cluster::new(0, 3, sim, pd_client.clone());
+
+    // can always apply snapshot immediately
+    fail::cfg("on_can_apply_snapshot", "return(true)");
+    cluster.raw.cfg.raft_store.right_derive_when_split = true;
+    cluster.raw.cfg.raft_store.right_derive_when_split = true;
+
+    // May fail if cluster.start, since node 2 is not in region1.peers(),
+    // and node 2 has not bootstrap region1,
+    // because region1 is not bootstrap if we only call cluster.start()
+    cluster.run();
+
+    cluster.raw.must_put(b"k1", b"v1");
+    cluster.raw.must_put(b"k3", b"v3");
+
+    check_key(&cluster, b"k1", b"v1", Some(true), None);
+    check_key(&cluster, b"k3", b"v3", Some(true), None);
+
+    let r1 = cluster.raw.get_region(b"k1");
+    let r3 = cluster.raw.get_region(b"k3");
+    assert_eq!(r1.get_id(), r3.get_id());
+
+    cluster.raw.must_split(&r1, b"k2");
+    let r1_new = cluster.raw.get_region(b"k1");
+    let r3_new = cluster.raw.get_region(b"k3");
+
+    assert_eq!(r1.get_id(), r3_new.get_id());
+
+    for id in cluster.raw.engines.keys() {
+        let mut lock = cluster
+            .ffi_helper_set.lock().unwrap();
+        let server = &lock.get_mut().get(id).unwrap()
+            .engine_store_server;
+        if !server.kvstore.contains_key(&r1_new.get_id()) {
+            panic!("node {} has no region {}", id, r1_new.get_id())
+        }
+        if !server.kvstore.contains_key(&r3_new.get_id()) {
+            panic!("node {} has no region {}", id, r3_new.get_id())
+        }
+        // Region meta must equal
+        assert_eq!(server.kvstore.get(&r1_new.get_id()).unwrap().region, r1_new);
+        assert_eq!(server.kvstore.get(&r3_new.get_id()).unwrap().region, r3_new);
+
+        // Can get from disk
+        check_key(&cluster, b"k1", b"v1", None, Some(true));
+        check_key(&cluster, b"k3", b"v3", None, Some(true));
+        // TODO Region in memory data must not contradict, but now we do not delete data
+    }
+
+    pd_client.must_merge(r1_new.get_id(), r3_new.get_id());
+    let r1_new2 = cluster.raw.get_region(b"k1");
+    let r3_new2 = cluster.raw.get_region(b"k3");
+
+    tikv_util::debug!("!!!! start check {:?} {:?}", r1_new2, r3_new2);
+
+    for id in cluster.raw.engines.keys() {
+        let mut lock = cluster
+            .ffi_helper_set.lock().unwrap();
+        let server = &lock.get_mut().get(id).unwrap()
+            .engine_store_server;
+
+        // The left region is removed
+        if server.kvstore.contains_key(&r1_new.get_id()) {
+            panic!("node {} should has no region {}", id, r1_new.get_id())
+        }
+        if !server.kvstore.contains_key(&r3_new.get_id()) {
+            panic!("node {} has no region {}", id, r3_new.get_id())
+        }
+        // Region meta must equal
+        assert_eq!(server.kvstore.get(&r3_new2.get_id()).unwrap().region, r3_new2);
+
+        // Can get from disk
+        check_key(&cluster, b"k1", b"v1", None, Some(true));
+        check_key(&cluster, b"k3", b"v3", None, Some(true));
+        // TODO Region in memory data must not contradict, but now we do not delete data
+
+        let origin_epoch = r3_new.get_region_epoch();
+        let new_epoch = r3_new2.get_region_epoch();
+        tikv_util::debug!("!!!! origin {:?} new {:?}", r3_new, r3_new2);
+        // PrepareMerge + CommitMerge, so it should be 2.
+        assert_eq!(new_epoch.get_version(), origin_epoch.get_version() + 2);
+        assert_eq!(new_epoch.get_conf_ver(), origin_epoch.get_conf_ver());
+    }
+
+}
+
+#[test]
 fn test_get_region_local_state() {
     let pd_client = Arc::new(TestPdClient::new(0, false));
     let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
@@ -280,7 +376,7 @@ fn test_get_region_local_state() {
     }
     let region_id = cluster.raw.get_region(k).get_id();
 
-    // get RegionLocalState through ffi
+    // Get RegionLocalState through ffi
     unsafe {
         for (_, ffi_set) in cluster.ffi_helper_set.lock().unwrap().get_mut().iter_mut() {
             let f = ffi_set.proxy_helper.fn_get_region_local_state.unwrap();

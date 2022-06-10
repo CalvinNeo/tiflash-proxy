@@ -5,7 +5,7 @@ pub use engine_store_ffi::interfaces::root::DB as ffi_interfaces;
 use engine_store_ffi::{
     EngineStoreServerHelper, RaftStoreProxyFFIHelper, RawCppPtr, UnwrapExternCFunc,
 };
-use engine_traits::{Engines, SyncMutable};
+use engine_traits::{Engines, SyncMutable, Iterable};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use protobuf::Message;
 use raftstore::store::RaftRouter;
@@ -30,9 +30,10 @@ pub mod transport_simulate;
 type RegionId = u64;
 #[derive(Default, Clone)]
 pub struct Region {
-    region: kvproto::metapb::Region,
+    pub region: kvproto::metapb::Region,
+    // Which peer is me?
     peer: kvproto::metapb::Peer,
-    // im-memory data
+    // in-memory data
     pub data: [BTreeMap<Vec<u8>, Vec<u8>>; 3],
     // If we a key is deleted, it will immediately be removed from data,
     // We will record the key in pending_delete, so we can delete it from disk when flushing.
@@ -77,6 +78,44 @@ pub struct EngineStoreServerWrap {
     pub cluster_ptr: isize,
 }
 
+fn set_new_region_peer(new_region: &mut Region, store_id: u64) {
+    if let Some(peer) = new_region
+        .region
+        .get_peers()
+        .iter()
+        .find(|&peer| peer.get_store_id() == store_id)
+    {
+        new_region.peer = peer.clone();
+    } else {
+        // This happens when region is not found.
+    }
+}
+
+pub fn make_new_region(
+    maybe_from_region: Option<kvproto::metapb::Region>,
+    maybe_store_id: Option<u64>,
+) -> Region {
+    let mut region = Region {
+        region: maybe_from_region.unwrap_or(Default::default()),
+        ..Default::default()
+    };
+    if let Some(store_id) = maybe_store_id {
+        set_new_region_peer(&mut region, store_id);
+    }
+    region
+        .apply_state
+        .mut_truncated_state()
+        .set_index(raftstore::store::RAFT_INIT_LOG_INDEX);
+    region
+        .apply_state
+        .mut_truncated_state()
+        .set_term(raftstore::store::RAFT_INIT_LOG_TERM);
+    region
+        .apply_state
+        .set_applied_index(raftstore::store::RAFT_INIT_LOG_INDEX);
+    region
+}
+
 impl EngineStoreServerWrap {
     pub fn new(
         engine_store_server: *mut EngineStoreServer,
@@ -97,11 +136,173 @@ impl EngineStoreServerWrap {
         header: ffi_interfaces::RaftCmdHeader,
     ) -> ffi_interfaces::EngineStoreApplyRes {
         let region_id = header.region_id;
+        let node_id = (*self.engine_store_server).id;
         info!("handle admin raft cmd"; "request"=>?req, "response"=>?resp, "index"=>header.index, "region-id"=>header.region_id);
-        let do_handle_admin_raft_cmd = move |region: &mut Box<Region>| {
+        let do_handle_admin_raft_cmd = move |region: &mut Box<Region>, engine_store_server: &mut EngineStoreServer| {
             if region.apply_state.get_applied_index() >= header.index {
                 return ffi_interfaces::EngineStoreApplyRes::Persist;
             }
+            match req.get_cmd_type() {
+                AdminCmdType::ChangePeer | AdminCmdType::ChangePeerV2 => {
+
+                    let new_region_meta = resp.get_change_peer().get_region();
+                    let old_peer_id = {
+                        let old_region = engine_store_server.kvstore.get_mut(&region_id).unwrap();
+                        old_region.region = new_region_meta.clone();
+                        old_region.apply_state.set_applied_index(header.index);
+                        old_region.peer.get_store_id()
+                    };
+
+                    let mut do_remove = true;
+                    if old_peer_id != 0 {
+                        for peer in new_region_meta.get_peers().iter() {
+                            if peer.get_store_id() == old_peer_id {
+                                // Should not remove region
+                                do_remove = false;
+                            }
+                        }
+                    } else {
+                        // If old_peer_id is 0, seems old_region.peer is not set, just neglect for convenience.
+                        do_remove = false;
+                    }
+                    if do_remove {
+                        let removed = engine_store_server.kvstore.remove(&region_id);
+                        // We need to also remove apply state, thus we need to know peer_id
+                        debug!(
+                            "Remove region {:?} peer_id {} at node {}, for new meta {:?}",
+                            removed.unwrap().region,
+                            old_peer_id,
+                            node_id,
+                            new_region_meta
+                        );
+                    }
+                },
+                AdminCmdType::BatchSplit => {
+                    let regions = resp.get_splits().regions.as_ref();
+
+                    for i in 0..regions.len() {
+                        let region_meta = regions.get(i).unwrap();
+                        if region_meta.id == region_id {
+                            // This is the derived region
+                            debug!(
+                                "region {} is derived by split at peer {} with meta {:?}",
+                                region_meta.id, node_id, region_meta
+                            );
+                            assert!(engine_store_server.kvstore.contains_key(&region_meta.id));
+                            engine_store_server
+                                .kvstore
+                                .get_mut(&region_meta.id)
+                                .unwrap()
+                                .region = region_meta.clone();
+                        } else {
+                            // Should split data into new region
+                            debug!(
+                                "new region {} generated by split at peer {} with meta {:?}",
+                                region_meta.id, node_id, region_meta
+                            );
+                            let mut new_region =
+                                make_new_region(Some(region_meta.clone()), Some(node_id));
+
+                            // No need to split data because all KV are stored in the same RocksDB.
+                            // TODO But we still need to clean all in-memory data.
+                            // We can't assert `region_meta.id` is brand new here
+                            engine_store_server
+                                .kvstore
+                                .insert(region_meta.id, Box::new(new_region));
+                        }
+                    }
+                },
+                AdminCmdType::PrepareMerge => {
+                    let tikv_region = resp.get_split().get_left();
+
+                    let target = req.prepare_merge.as_ref().unwrap().target.as_ref();
+                    let region_meta = &mut (engine_store_server
+                        .kvstore
+                        .get_mut(&region_id)
+                        .unwrap()
+                        .region);
+                    let region_epoch = region_meta.region_epoch.as_mut().unwrap();
+
+                    let new_version = region_epoch.version + 1;
+                    region_epoch.set_version(new_version);
+                    assert_eq!(tikv_region.get_region_epoch().get_version(), new_version);
+
+                    let conf_version = region_epoch.conf_ver + 1;
+                    region_epoch.set_conf_ver(conf_version);
+                    assert_eq!(tikv_region.get_region_epoch().get_conf_ver(), conf_version);
+
+                    {
+                        let region = engine_store_server.kvstore.get_mut(&region_id).unwrap();
+                        region.apply_state.set_applied_index(header.index);
+                    }
+                    // We don't handle MergeState and PeerState here
+                },
+                AdminCmdType::CommitMerge => {
+                    {
+                        let tikv_target_region_meta = resp.get_split().get_left();
+                        debug!("!!!! tikv_target_region_meta {:?}", tikv_target_region_meta);
+
+                        let target_region =
+                            &mut (engine_store_server.kvstore.get_mut(&region_id).unwrap());
+                        let target_region_meta = &mut target_region.region;
+                        let target_version = target_region_meta.get_region_epoch().get_version();
+                        let source_region = req.get_commit_merge().get_source();
+                        let source_version = source_region.get_region_epoch().get_version();
+                        debug!("!!!! source_region {:?}", source_region);
+
+                        let new_version = std::cmp::max(source_version, target_version) + 1;
+                        target_region_meta
+                            .mut_region_epoch()
+                            .set_version(new_version);
+                        assert_eq!(
+                            target_region_meta.get_region_epoch().get_version(),
+                            new_version
+                        );
+
+                        // No need to merge data
+                        let source_at_left = if source_region.get_start_key().is_empty() {
+                            true
+                        } else if target_region_meta.get_start_key().is_empty() {
+                            false
+                        } else {
+                            source_region
+                                .get_end_key()
+                                .cmp(target_region_meta.get_start_key())
+                                == std::cmp::Ordering::Equal
+                        };
+
+                        if source_at_left {
+                            target_region_meta
+                                .set_start_key(source_region.get_start_key().to_vec());
+                            assert_eq!(
+                                tikv_target_region_meta.get_start_key(),
+                                target_region_meta.get_start_key()
+                            );
+                        } else {
+                            target_region_meta.set_end_key(source_region.get_end_key().to_vec());
+                            assert_eq!(
+                                tikv_target_region_meta.get_end_key(),
+                                target_region_meta.get_end_key()
+                            );
+                        }
+                        target_region.apply_state.set_applied_index(header.index);
+                    }
+                    let to_remove = req.get_commit_merge().get_source().get_id();
+                    debug!("!!!! remove source_region {:?}", to_remove);
+                    engine_store_server
+                        .kvstore
+                        .remove(&to_remove);
+                },
+                AdminCmdType::RollbackMerge => {
+                    let region = (engine_store_server.kvstore.get_mut(&region_id).unwrap());
+                    let region_meta = &mut region.region;
+                    let new_version = region_meta.get_region_epoch().get_version() + 1;
+
+                    region.apply_state.set_applied_index(header.index);
+                },
+                _ => {},
+            }
+            // do persist or not
             match req.get_cmd_type() {
                 AdminCmdType::CompactLog => {
                     fail::fail_point!("on_handle_admin_raft_cmd_no_persist", |_| {
@@ -116,18 +317,27 @@ impl EngineStoreServerWrap {
         };
         let res = match (*self.engine_store_server).kvstore.entry(region_id) {
             std::collections::hash_map::Entry::Occupied(mut o) => {
-                do_handle_admin_raft_cmd(o.get_mut())
+                do_handle_admin_raft_cmd(o.get_mut(), &mut (*self.engine_store_server))
             }
             std::collections::hash_map::Entry::Vacant(v) => {
                 // Currently, we don't handle commands like BatchSplit,
                 // so it is normal if we find no region.
-                warn!("region {} not found", region_id);
-                do_handle_admin_raft_cmd(v.insert(Default::default()))
+                warn!("region {} not found, create for {}", region_id, node_id);
+                let new_region = v.insert(Default::default());
+                assert!( (*self.engine_store_server).kvstore.contains_key(&region_id));
+                do_handle_admin_raft_cmd(new_region, &mut (*self.engine_store_server))
             }
         };
 
         // We must have this region now.
-        let region = (*self.engine_store_server).kvstore.get_mut(&region_id).unwrap();
+        let region = match (*self.engine_store_server).kvstore.get_mut(&region_id) {
+            Some(r) => {
+                r
+            },
+            None => {
+                panic!("still can't find region {} for {}", region_id, node_id);
+            }
+        };
         match res {
             ffi_interfaces::EngineStoreApplyRes::Persist => {
                 Self::write_to_db_data(&mut (*self.engine_store_server), region);
@@ -135,6 +345,22 @@ impl EngineStoreServerWrap {
             _ => (),
         };
         res
+    }
+
+    unsafe fn load_from_db(store: &mut EngineStoreServer, region: &mut Box<Region>) {
+        let kv = &mut store.engines.as_mut().unwrap().kv;
+        for cf in 0..3 {
+            let cf_name = cf_to_name(cf.into());
+            region.data[cf].clear();
+            region.pending_delete[cf].clear();
+            region.pending_write[cf].clear();
+            let start = region.region.get_start_key().to_owned();
+            let end = region.region.get_end_key().to_owned();
+            kv.scan_cf(cf_name, &start, &end, false, |k ,v| {
+                region.data[cf].insert(k.to_vec(), v.to_vec());
+                Ok(true)
+            });
+        }
     }
 
     unsafe fn write_to_db_data(store: &mut EngineStoreServer, region: &mut Box<Region>) {
@@ -147,10 +373,11 @@ impl EngineStoreServerWrap {
                 let tikv_key = keys::data_key(k.as_slice());
                 let cf_name = cf_to_name(cf.into());
                 if !pending_remove.contains(&k) {
-                    kv.rocks.put_cf(cf_name, &tikv_key, &v);
+                    info!("!!!! mock flush to engine, id {}, write {:?} {:?}", store.id, &tikv_key, &v);
+                    kv.rocks.put_cf(cf_name, &tikv_key.as_slice(), &v);
                 } else {
                     pending_remove.remove(&k);
-                    debug!("key is later deleted {:?} in region {:?}", &k, region.region);
+                    debug!("!!!! key is later deleted {:?} in region {:?}", &k, region.region);
                 }
             }
             let cf_name = cf_to_name(cf.into());
@@ -578,6 +805,7 @@ unsafe extern "C" fn ffi_pre_handle_snapshot(
             let cf = (*snapshot).type_;
             let cf_index = cf as u8;
             let cf_name = cf_to_name(cf.into());
+            debug!("!!!!! prehandle write {:?} {:?}", key.to_slice(), value.to_slice());
             write_kv_in_mem(&mut region, cf_index as usize, key.to_slice(), value.to_slice());
             sst_reader.next();
         }
