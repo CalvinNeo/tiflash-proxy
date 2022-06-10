@@ -153,7 +153,6 @@ impl KvEngine for RocksEngine {
         // if queue is full, we should begin to handle
         let can = in_queue > self.pool_capacity;
         fail::fail_point!("on_can_apply_snapshot", |e| e.unwrap().parse::<bool>().unwrap());
-        tikv_util::debug!("!!!!! pending_applies_count {} cap {} can {}", in_queue, self.pool_capacity, can);
         can
     }
 }

@@ -35,6 +35,7 @@ use tikv_util::time::Duration;
 use raft::eraftpb::MessageType;
 use mock_engine_store::transport_simulate::Direction;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use kvproto::raft_cmdpb::{AdminRequest, AdminCmdType};
 
 #[test]
 fn test_config() {
@@ -120,10 +121,19 @@ pub fn must_get_mem(engine_store_server: &Box<mock_engine_store::EngineStoreServ
     )
 }
 
-fn check_key(cluster: &mock_engine_store::mock_cluster::Cluster<NodeCluster>, k: &[u8], v: &[u8], in_mem: Option<bool>, in_disk: Option<bool>) {
+fn check_key(cluster: &mock_engine_store::mock_cluster::Cluster<NodeCluster>,
+             k: &[u8], v: &[u8], in_mem: Option<bool>, in_disk: Option<bool>, engines: Option<Vec<u64>>) {
     let region_id = cluster.raw.get_region(k).get_id();
-    for id in cluster.raw.engines.keys() {
-        let engine = &cluster.raw.get_engine(*id);
+    let engine_keys = {
+        match engines {
+            Some(e) => e.to_vec(),
+            None => {
+                cluster.raw.engines.keys().map(|k| *k).collect::<Vec<u64>>()
+            },
+        }
+    };
+    for id in engine_keys {
+        let engine = &cluster.raw.get_engine(id);
 
         match in_disk {
             Some(b) => {
@@ -140,7 +150,7 @@ fn check_key(cluster: &mock_engine_store::mock_cluster::Cluster<NodeCluster>, k:
             Some(b) => {
                 let mut lock = cluster
                     .ffi_helper_set.lock().unwrap();
-                let server = &lock.get_mut().get(id).unwrap()
+                let server = &lock.get_mut().get(&id).unwrap()
                     .engine_store_server;
                 if b {
                     must_get_mem(server, region_id, k, Some(v));
@@ -191,11 +201,7 @@ fn test_kv_write() {
             _ => unreachable!(),
         };
 
-        let region_state_key = keys::apply_state_key(r1);
-        let apply_state = match engine.get_msg_cf::<RaftApplyState>(CF_RAFT, &region_state_key) {
-            Ok(Some(s)) => s,
-            _ => unreachable!(),
-        };
+        let apply_state = get_apply_state(&engine, r1);
         prev_apply_state.insert(*id, apply_state);
 
         match engine.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY) {
@@ -215,7 +221,7 @@ fn test_kv_write() {
     for i in 10..20 {
         let k = format!("k{}", i);
         let v = format!("v{}", i);
-        check_key(&cluster, k.as_bytes(), v.as_bytes(), Some(true), Some(false));
+        check_key(&cluster, k.as_bytes(), v.as_bytes(), Some(true), Some(false), None);
     }
 
     fail::remove("on_handle_admin_raft_cmd_no_persist");
@@ -229,7 +235,7 @@ fn test_kv_write() {
     for i in 11..30 {
         let k = format!("k{}", i);
         let v = format!("v{}", i);
-        check_key(&cluster, k.as_bytes(), v.as_bytes(), Some(true), None);
+        check_key(&cluster, k.as_bytes(), v.as_bytes(), Some(true), None, None);
     }
 
     // Force a compact log to persist
@@ -246,7 +252,7 @@ fn test_kv_write() {
     for i in 11..30 {
         let k = format!("k{}", i);
         let v = format!("v{}", i);
-        check_key(&cluster, k.as_bytes(), v.as_bytes(), Some(true), Some(true));
+        check_key(&cluster, k.as_bytes(), v.as_bytes(), Some(true), Some(true), None);
     }
 
     for id in cluster.raw.engines.keys() {
@@ -254,20 +260,132 @@ fn test_kv_write() {
         let db = cluster.raw.get_engine(*id);
         let engine = engine_rocks::RocksEngine::from_db(db);
 
-        let region_state_key = keys::apply_state_key(r1);
-        let apply_state = match engine.get_msg_cf::<RaftApplyState>(CF_RAFT, &region_state_key) {
-            Ok(Some(s)) => s,
-            _ => unreachable!(),
-        };
+        let apply_state = get_apply_state(&engine, r1);
     }
 
     fail::remove("on_handle_admin_raft_cmd_no_persist");
     cluster.raw.shutdown();
 }
 
+fn get_apply_state(engine: &engine_rocks::RocksEngine, region_id: u64) -> RaftApplyState {
+    let apply_state_key = keys::apply_state_key(region_id);
+    let apply_state = match engine.get_msg_cf::<RaftApplyState>(CF_RAFT, &apply_state_key) {
+        Ok(Some(s)) => s,
+        _ => unreachable!(),
+    };
+    apply_state
+}
+
+pub fn new_compute_hash_request() -> AdminRequest {
+    let mut req = AdminRequest::default();
+    req.set_cmd_type(AdminCmdType::ComputeHash);
+    req
+}
+
+pub fn new_verify_hash_request() -> AdminRequest {
+    let mut req = AdminRequest::default();
+    req.set_cmd_type(AdminCmdType::VerifyHash);
+    req
+}
+
+#[test]
+fn test_consistency_check() {
+    let pd_client = Arc::new(TestPdClient::new(0, false));
+    let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
+    let mut cluster = mock_engine_store::mock_cluster::Cluster::new(0, 3, sim, pd_client.clone());
+
+    cluster.run();
+
+    cluster.raw.must_put(b"k", b"v");
+    let region = cluster.raw.get_region("k".as_bytes());
+    let region_id = region.get_id();
+
+    let r = new_compute_hash_request();
+    let req = test_raftstore::new_admin_request(region_id, region.get_region_epoch(), r);
+    let res = cluster
+        .raw
+        .call_command_on_leader(req, Duration::from_secs(3))
+        .unwrap();
+
+    let r = new_verify_hash_request();
+    let req = test_raftstore::new_admin_request(region_id, region.get_region_epoch(), r);
+    let res = cluster
+        .raw
+        .call_command_on_leader(req, Duration::from_secs(3))
+        .unwrap();
+
+    cluster.raw.shutdown();
+}
+
 #[test]
 fn test_compact_log() {
+    let pd_client = Arc::new(TestPdClient::new(0, false));
+    let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
+    let mut cluster = mock_engine_store::mock_cluster::Cluster::new(0, 3, sim, pd_client.clone());
 
+    cluster.run();
+
+    cluster.raw.must_put(b"k", b"v");
+    let region = cluster.raw.get_region("k".as_bytes());
+    let region_id = region.get_id();
+
+    fail::cfg("can_flush_data", "return(0)");
+    for i in 0..10 {
+        let k = format!("k{}", i);
+        let v = format!("v{}", i);
+        cluster.raw.must_put(k.as_bytes(), v.as_bytes());
+    }
+
+    let mut hmap: HashMap<u64, RaftApplyState> = Default::default();
+    for id in cluster.raw.engines.keys() {
+        let mut lock = cluster
+            .ffi_helper_set.lock().unwrap();
+        let server = &lock.get_mut().get(id).unwrap()
+            .engine_store_server;
+        let apply_state = get_apply_state(&server.engines.as_ref().unwrap().kv.rocks, region_id);
+        hmap.insert(*id, apply_state);
+    }
+
+    let compact_log = test_raftstore::new_compact_log_request(100, 10);
+    let req = test_raftstore::new_admin_request(region_id, region.get_region_epoch(), compact_log);
+    let res = cluster
+        .raw
+        .call_command_on_leader(req, Duration::from_secs(3))
+        .unwrap();
+
+    // compact log is filtered
+    for id in cluster.raw.engines.keys() {
+        let mut lock = cluster
+            .ffi_helper_set.lock().unwrap();
+        let server = &lock.get_mut().get(id).unwrap()
+            .engine_store_server;
+        let apply_state = get_apply_state(&server.engines.as_ref().unwrap().kv.rocks, region_id);
+        assert_eq!(apply_state.get_truncated_state(), hmap.get(id).unwrap().get_truncated_state());
+    }
+
+    fail::remove("can_flush_data");
+    let compact_log = test_raftstore::new_compact_log_request(100, 10);
+    let req = test_raftstore::new_admin_request(region_id, region.get_region_epoch(), compact_log);
+    let res = cluster
+        .raw
+        .call_command_on_leader(req, Duration::from_secs(3))
+        .unwrap();
+    assert!(res.get_header().has_error(), "{:?}", res);
+
+    cluster.raw.must_put(b"kz", b"vz");
+    check_key(&cluster, b"kz", b"vz", Some(true), None, None);
+
+    // compact log is not filtered
+    for id in cluster.raw.engines.keys() {
+        let mut lock = cluster
+            .ffi_helper_set.lock().unwrap();
+        let server = &lock.get_mut().get(id).unwrap()
+            .engine_store_server;
+        let apply_state = get_apply_state(&server.engines.as_ref().unwrap().kv.rocks, region_id);
+        assert_ne!(apply_state.get_truncated_state(), hmap.get(id).unwrap().get_truncated_state());
+    }
+
+    cluster.raw.shutdown();
 }
 
 #[test]
@@ -279,7 +397,6 @@ fn test_split_merge() {
     // can always apply snapshot immediately
     fail::cfg("on_can_apply_snapshot", "return(true)");
     cluster.raw.cfg.raft_store.right_derive_when_split = true;
-    cluster.raw.cfg.raft_store.right_derive_when_split = true;
 
     // May fail if cluster.start, since node 2 is not in region1.peers(),
     // and node 2 has not bootstrap region1,
@@ -289,8 +406,8 @@ fn test_split_merge() {
     cluster.raw.must_put(b"k1", b"v1");
     cluster.raw.must_put(b"k3", b"v3");
 
-    check_key(&cluster, b"k1", b"v1", Some(true), None);
-    check_key(&cluster, b"k3", b"v3", Some(true), None);
+    check_key(&cluster, b"k1", b"v1", Some(true), None, None);
+    check_key(&cluster, b"k3", b"v3", Some(true), None, None);
 
     let r1 = cluster.raw.get_region(b"k1");
     let r3 = cluster.raw.get_region(b"k3");
@@ -318,16 +435,14 @@ fn test_split_merge() {
         assert_eq!(server.kvstore.get(&r3_new.get_id()).unwrap().region, r3_new);
 
         // Can get from disk
-        check_key(&cluster, b"k1", b"v1", None, Some(true));
-        check_key(&cluster, b"k3", b"v3", None, Some(true));
+        check_key(&cluster, b"k1", b"v1", None, Some(true), None);
+        check_key(&cluster, b"k3", b"v3", None, Some(true), None);
         // TODO Region in memory data must not contradict, but now we do not delete data
     }
 
     pd_client.must_merge(r1_new.get_id(), r3_new.get_id());
     let r1_new2 = cluster.raw.get_region(b"k1");
     let r3_new2 = cluster.raw.get_region(b"k3");
-
-    tikv_util::debug!("!!!! start check {:?} {:?}", r1_new2, r3_new2);
 
     for id in cluster.raw.engines.keys() {
         let mut lock = cluster
@@ -346,8 +461,8 @@ fn test_split_merge() {
         assert_eq!(server.kvstore.get(&r3_new2.get_id()).unwrap().region, r3_new2);
 
         // Can get from disk
-        check_key(&cluster, b"k1", b"v1", None, Some(true));
-        check_key(&cluster, b"k3", b"v3", None, Some(true));
+        check_key(&cluster, b"k1", b"v1", None, Some(true), None);
+        check_key(&cluster, b"k3", b"v3", None, Some(true), None);
         // TODO Region in memory data must not contradict, but now we do not delete data
 
         let origin_epoch = r3_new.get_region_epoch();
@@ -358,6 +473,8 @@ fn test_split_merge() {
         assert_eq!(new_epoch.get_conf_ver(), origin_epoch.get_conf_ver());
     }
 
+    fail::remove("on_can_apply_snapshot");
+    cluster.raw.shutdown();
 }
 
 #[test]
@@ -448,6 +565,7 @@ fn test_huge_snapshot() {
     let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
     let mut cluster = mock_engine_store::mock_cluster::Cluster::new(0, 3, sim, pd_client.clone());
 
+    fail::cfg("on_can_apply_snapshot", "return(true)");
     cluster.raw.cfg.raft_store.raft_log_gc_count_limit = 1000;
     cluster.raw.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10);
     cluster.raw.cfg.raft_store.snap_apply_batch_size = ReadableSize(500);
@@ -473,9 +591,9 @@ fn test_huge_snapshot() {
 
     let (key, value) = (b"k2", b"v2");
     cluster.raw.must_put(key, value);
-    assert_eq!(cluster.raw.get(key), Some(value.to_vec()));
-    must_get_equal(&engine_2, key, value);
-    // now snapshot must be applied on peer engine_2;
+    // we can get in memory, since snapshot is pre handled, though it is not persisted
+    check_key(&cluster, key, value, Some(true), None, Some(vec![eng_ids[1]]));
+    // now snapshot must be applied on peer engine_2
     must_get_equal(&engine_2, first_key, first_value.as_slice());
 
     fail::cfg("on_ob_post_apply_snapshot", "return").unwrap();
@@ -487,13 +605,13 @@ fn test_huge_snapshot() {
 
     let (key, value) = (b"k3", b"v3");
     cluster.raw.must_put(key, value);
-    assert_eq!(cluster.raw.get(key), Some(value.to_vec()));
-    must_get_equal(&engine_3, key, value);
+    check_key(&cluster, key, value, Some(true), None, None);
     // We have not persist pre handled snapshot,
     // we can't be sure if it exists in only get from memory too, since pre handle snapshot is async.
     must_get_none(&engine_3, first_key);
 
     fail::remove("on_ob_post_apply_snapshot");
+    fail::remove("on_can_apply_snapshot");
 
     cluster.raw.shutdown();
 }
@@ -513,6 +631,8 @@ fn test_multiple_snapshot() {
 
     let r1 = cluster.run_conf_change();
     cluster.raw.must_put(b"k1", b"v1");
+
+    cluster.raw.shutdown();
 }
 
 // #[test]
@@ -561,6 +681,8 @@ fn test_concurrent_snapshot() {
     // must_get_equal(&cluster.raw.get_engine(3), b"k11", b"v11");
     // cluster.raw.must_put(b"k4", b"v4");
     // must_get_equal(&cluster.raw.get_engine(3), b"k4", b"v4");
+
+    cluster.raw.shutdown();
 }
 
 #[test]
@@ -596,4 +718,6 @@ fn test_concurrent_snapshot2() {
     assert_eq!(pending_count.load(Ordering::Relaxed), 2);
     std::thread::sleep(std::time::Duration::from_millis(1000));
     assert_eq!(pending_count.load(Ordering::Relaxed), 0);
+
+    cluster.raw.shutdown();
 }

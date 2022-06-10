@@ -155,7 +155,11 @@ impl TiFlashObserver {
     }
 }
 
-impl Coprocessor for TiFlashObserver {}
+impl Coprocessor for TiFlashObserver {
+    fn stop(&self) {
+        self.engine.apply_snap_pool.as_ref().unwrap().shutdown();
+    }
+}
 
 impl QueryObserver for TiFlashObserver {
     fn address_apply_result(
@@ -244,7 +248,6 @@ impl QueryObserver for TiFlashObserver {
             };
             let persisted = match flash_res {
                 EngineStoreApplyRes::None => {
-                    info!("!!!! write None {} {}", cmd.index, cmd.term);
                     false
                 }
                 EngineStoreApplyRes::Persist => {
@@ -264,6 +267,21 @@ impl QueryObserver for TiFlashObserver {
 }
 
 impl AdminObserver for TiFlashObserver {
+    fn pre_exec_admin(&self, _: &mut ObserverContext<'_>, req: &AdminRequest, should_skip: &mut bool) {
+        match req.get_cmd_type() {
+            AdminCmdType::CompactLog => {
+                if !self.engine_store_server_helper.can_flush_data() {
+                    *should_skip = true
+                }
+            },
+            AdminCmdType::ComputeHash | AdminCmdType::VerifyHash => {
+                // TiFlash don't support.
+                *should_skip = true
+            },
+            _ => (),
+        };
+    }
+
     fn address_apply_result(
         &self,
         ob_ctx: &mut ObserverContext<'_>,

@@ -240,7 +240,6 @@ impl EngineStoreServerWrap {
                 AdminCmdType::CommitMerge => {
                     {
                         let tikv_target_region_meta = resp.get_split().get_left();
-                        debug!("!!!! tikv_target_region_meta {:?}", tikv_target_region_meta);
 
                         let target_region =
                             &mut (engine_store_server.kvstore.get_mut(&region_id).unwrap());
@@ -248,7 +247,6 @@ impl EngineStoreServerWrap {
                         let target_version = target_region_meta.get_region_epoch().get_version();
                         let source_region = req.get_commit_merge().get_source();
                         let source_version = source_region.get_region_epoch().get_version();
-                        debug!("!!!! source_region {:?}", source_region);
 
                         let new_version = std::cmp::max(source_version, target_version) + 1;
                         target_region_meta
@@ -288,7 +286,6 @@ impl EngineStoreServerWrap {
                         target_region.apply_state.set_applied_index(header.index);
                     }
                     let to_remove = req.get_commit_merge().get_source().get_id();
-                    debug!("!!!! remove source_region {:?}", to_remove);
                     engine_store_server
                         .kvstore
                         .remove(&to_remove);
@@ -373,11 +370,9 @@ impl EngineStoreServerWrap {
                 let tikv_key = keys::data_key(k.as_slice());
                 let cf_name = cf_to_name(cf.into());
                 if !pending_remove.contains(&k) {
-                    info!("!!!! mock flush to engine, id {}, write {:?} {:?}", store.id, &tikv_key, &v);
                     kv.rocks.put_cf(cf_name, &tikv_key.as_slice(), &v);
                 } else {
                     pending_remove.remove(&k);
-                    debug!("!!!! key is later deleted {:?} in region {:?}", &k, region.region);
                 }
             }
             let cf_name = cf_to_name(cf.into());
@@ -473,6 +468,7 @@ pub fn gen_engine_store_server_helper(
         fn_gen_cpp_string: Some(ffi_gen_cpp_string),
         fn_handle_write_raft_cmd: Some(ffi_handle_write_raft_cmd),
         fn_handle_admin_raft_cmd: Some(ffi_handle_admin_raft_cmd),
+        fn_can_flush_data: Some(ffi_can_flush_data),
         fn_atomic_update_proxy: Some(ffi_atomic_update_proxy),
         fn_handle_destroy: Some(ffi_handle_destroy),
         fn_handle_ingest_sst: Some(ffi_handle_ingest_sst),
@@ -546,6 +542,11 @@ impl Into<ffi_interfaces::RawCppPtrType> for RawCppPtrTypeImpl {
             RawCppPtrTypeImpl::WakerNotifier => 3,
         }
     }
+}
+
+extern "C" fn ffi_can_flush_data() -> u8 {
+    fail::fail_point!("can_flush_data", |e| e.unwrap().parse::<u8>().unwrap());
+    true as u8
 }
 
 extern "C" fn ffi_gen_cpp_string(s: ffi_interfaces::BaseBuffView) -> ffi_interfaces::RawCppPtr {
@@ -805,7 +806,6 @@ unsafe extern "C" fn ffi_pre_handle_snapshot(
             let cf = (*snapshot).type_;
             let cf_index = cf as u8;
             let cf_name = cf_to_name(cf.into());
-            debug!("!!!!! prehandle write {:?} {:?}", key.to_slice(), value.to_slice());
             write_kv_in_mem(&mut region, cf_index as usize, key.to_slice(), value.to_slice());
             sst_reader.next();
         }
