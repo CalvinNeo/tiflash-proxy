@@ -355,7 +355,7 @@ pub mod root {
                     arg4: root::DB::RaftCmdHeader,
                 ) -> root::DB::EngineStoreApplyRes,
             >,
-            pub fn_can_flush_data: ::std::option::Option<unsafe extern "C" fn() -> u8>,
+            pub fn_can_flush_data: ::std::option::Option<unsafe extern "C" fn(arg1: *mut root::DB::EngineStoreServerWrap) -> u8>,
             pub fn_atomic_update_proxy: ::std::option::Option<
                 unsafe extern "C" fn(
                     arg1: *mut root::DB::EngineStoreServerWrap,

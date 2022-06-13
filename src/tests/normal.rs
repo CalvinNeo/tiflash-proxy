@@ -36,6 +36,7 @@ use raft::eraftpb::MessageType;
 use mock_engine_store::transport_simulate::Direction;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use kvproto::raft_cmdpb::{AdminRequest, AdminCmdType};
+use raftstore::coprocessor::{ConsistencyCheckMethod, Coprocessor};
 
 #[test]
 fn test_config() {
@@ -279,12 +280,15 @@ fn get_apply_state(engine: &engine_rocks::RocksEngine, region_id: u64) -> RaftAp
 pub fn new_compute_hash_request() -> AdminRequest {
     let mut req = AdminRequest::default();
     req.set_cmd_type(AdminCmdType::ComputeHash);
+    req.mut_compute_hash().set_context(vec![ConsistencyCheckMethod::Raw as u8]);
     req
 }
 
-pub fn new_verify_hash_request() -> AdminRequest {
+pub fn new_verify_hash_request(hash: Vec<u8>, index: u64) -> AdminRequest {
     let mut req = AdminRequest::default();
     req.set_cmd_type(AdminCmdType::VerifyHash);
+    req.mut_verify_hash().set_hash(hash);
+    req.mut_verify_hash().set_index(index);
     req
 }
 
@@ -292,7 +296,7 @@ pub fn new_verify_hash_request() -> AdminRequest {
 fn test_consistency_check() {
     let pd_client = Arc::new(TestPdClient::new(0, false));
     let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
-    let mut cluster = mock_engine_store::mock_cluster::Cluster::new(0, 3, sim, pd_client.clone());
+    let mut cluster = mock_engine_store::mock_cluster::Cluster::new(0, 2, sim, pd_client.clone());
 
     cluster.run();
 
@@ -300,20 +304,21 @@ fn test_consistency_check() {
     let region = cluster.raw.get_region("k".as_bytes());
     let region_id = region.get_id();
 
-    let r = new_compute_hash_request();
+    let r = new_verify_hash_request(vec![1,2,3,4,5,6], 1000);
     let req = test_raftstore::new_admin_request(region_id, region.get_region_epoch(), r);
     let res = cluster
         .raw
         .call_command_on_leader(req, Duration::from_secs(3))
         .unwrap();
 
-    let r = new_verify_hash_request();
+    let r = new_verify_hash_request(vec![7,8,9,0], 1000);
     let req = test_raftstore::new_admin_request(region_id, region.get_region_epoch(), r);
     let res = cluster
         .raw
         .call_command_on_leader(req, Duration::from_secs(3))
         .unwrap();
 
+    cluster.raw.must_put(b"k2", b"v2");
     cluster.raw.shutdown();
 }
 

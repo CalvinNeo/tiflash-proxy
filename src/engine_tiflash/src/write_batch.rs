@@ -74,7 +74,7 @@ impl engine_traits::WriteBatch for RocksWriteBatch {
         self.wb.is_empty()
     }
 
-    fn should_write_to_engine(&self) -> bool {
+    fn should_write_to_engine(&self, is_finished: bool) -> bool {
         // Always not write to engine for kv
         false
     }

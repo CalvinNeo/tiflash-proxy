@@ -215,7 +215,8 @@ impl QueryObserver for TiFlashObserver {
                     EngineStoreApplyRes::None => {
                         // Before, BR/Lightning may let ingest sst cmd contain only one cf,
                         // which may cause that tiflash can not flush all region cache into column.
-                        // so we have a optimization proxy@cee1f003. However, this is fixed in tiflash#1811.
+                        // so we have a optimization proxy@cee1f003.
+                        // However, since this is fixed in tiflash#1811, this optimization is no longer necessary.
                         error!(
                             "should not skip persist for ingest sst";
                             "region_id" => ob_ctx.region().get_id(),

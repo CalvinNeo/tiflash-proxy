@@ -847,7 +847,7 @@ impl EngineStoreServerHelper {
 
     pub fn can_flush_data(&self) -> bool {
         debug_assert!(self.fn_can_flush_data.is_some());
-        unsafe { (self.fn_can_flush_data.into_inner())() != 0 }
+        unsafe { (self.fn_can_flush_data.into_inner())(self.inner) != 0 }
     }
 
     pub fn handle_write_raft_cmd(

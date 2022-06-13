@@ -144,7 +144,6 @@ impl EngineStoreServerWrap {
             }
             match req.get_cmd_type() {
                 AdminCmdType::ChangePeer | AdminCmdType::ChangePeerV2 => {
-
                     let new_region_meta = resp.get_change_peer().get_region();
                     let old_peer_id = {
                         let old_region = engine_store_server.kvstore.get_mut(&region_id).unwrap();
@@ -544,7 +543,7 @@ impl Into<ffi_interfaces::RawCppPtrType> for RawCppPtrTypeImpl {
     }
 }
 
-extern "C" fn ffi_can_flush_data() -> u8 {
+extern "C" fn ffi_can_flush_data(arg1: *mut ffi_interfaces::EngineStoreServerWrap) -> u8 {
     fail::fail_point!("can_flush_data", |e| e.unwrap().parse::<u8>().unwrap());
     true as u8
 }
