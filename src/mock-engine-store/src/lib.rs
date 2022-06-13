@@ -290,7 +290,7 @@ impl EngineStoreServerWrap {
                         .remove(&to_remove);
                 },
                 AdminCmdType::RollbackMerge => {
-                    let region = (engine_store_server.kvstore.get_mut(&region_id).unwrap());
+                    let region = engine_store_server.kvstore.get_mut(&region_id).unwrap();
                     let region_meta = &mut region.region;
                     let new_version = region_meta.get_region_epoch().get_version() + 1;
 
@@ -543,7 +543,7 @@ impl Into<ffi_interfaces::RawCppPtrType> for RawCppPtrTypeImpl {
     }
 }
 
-extern "C" fn ffi_can_flush_data(arg1: *mut ffi_interfaces::EngineStoreServerWrap) -> u8 {
+extern "C" fn ffi_can_flush_data(arg1: *mut ffi_interfaces::EngineStoreServerWrap, region_id: u64) -> u8 {
     fail::fail_point!("can_flush_data", |e| e.unwrap().parse::<u8>().unwrap());
     true as u8
 }

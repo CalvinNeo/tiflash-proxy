@@ -268,10 +268,10 @@ impl QueryObserver for TiFlashObserver {
 }
 
 impl AdminObserver for TiFlashObserver {
-    fn pre_exec_admin(&self, _: &mut ObserverContext<'_>, req: &AdminRequest, should_skip: &mut bool) {
+    fn pre_exec_admin(&self, ob_ctx: &mut ObserverContext<'_>, req: &AdminRequest, should_skip: &mut bool) {
         match req.get_cmd_type() {
             AdminCmdType::CompactLog => {
-                if !self.engine_store_server_helper.can_flush_data() {
+                if !self.engine_store_server_helper.can_flush_data(ob_ctx.region().get_id()) {
                     *should_skip = true
                 }
             },

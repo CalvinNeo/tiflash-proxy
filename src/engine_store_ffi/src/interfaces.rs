@@ -356,7 +356,7 @@ pub mod root {
                 ) -> root::DB::EngineStoreApplyRes,
             >,
             pub fn_can_flush_data: ::std::option::Option<
-                unsafe extern "C" fn(arg1: *mut root::DB::EngineStoreServerWrap) -> u8,
+                unsafe extern "C" fn(arg1: *mut root::DB::EngineStoreServerWrap, arg2: u64) -> u8,
             >,
             pub fn_atomic_update_proxy: ::std::option::Option<
                 unsafe extern "C" fn(
@@ -434,7 +434,7 @@ pub mod root {
                 ),
             >,
         }
-        pub const RAFT_STORE_PROXY_VERSION: u64 = 236428354598719325;
+        pub const RAFT_STORE_PROXY_VERSION: u64 = 17221220539668533899;
         pub const RAFT_STORE_PROXY_MAGIC_NUMBER: u32 = 324508639;
     }
 }
