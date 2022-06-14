@@ -543,7 +543,7 @@ impl Into<ffi_interfaces::RawCppPtrType> for RawCppPtrTypeImpl {
     }
 }
 
-extern "C" fn ffi_can_flush_data(arg1: *mut ffi_interfaces::EngineStoreServerWrap, region_id: u64) -> u8 {
+extern "C" fn ffi_can_flush_data(arg1: *mut ffi_interfaces::EngineStoreServerWrap, region_id: u64, flush_if_possible: u8) -> u8 {
     fail::fail_point!("can_flush_data", |e| e.unwrap().parse::<u8>().unwrap());
     true as u8
 }
