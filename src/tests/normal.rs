@@ -212,8 +212,6 @@ fn test_leadership_change() {
     cluster.raw.must_put(b"k2", b"v2");
     fail::cfg("on_empty_cmd_normal", "return");
 
-    std::thread::sleep(std::time::Duration::from_secs(4));
-
     let prev_states = collect_all_states(&cluster, region_id);
     cluster.raw.must_transfer_leader(region.get_id(), peer_2.clone());
 
@@ -235,7 +233,6 @@ fn test_leadership_change() {
         assert_ne!(old.in_memory_apply_state, new.in_memory_apply_state);
         assert_ne!(old.in_memory_applied_term, new.in_memory_applied_term);
     }
-
 
     cluster.raw.shutdown();
 }
@@ -287,8 +284,8 @@ fn test_kv_write() {
     let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
     let mut cluster = mock_engine_store::mock_cluster::Cluster::new(0, 3, sim, pd_client);
 
-    fail::cfg("on_address_apply_result_normal", "return").unwrap();
-    fail::cfg("on_address_apply_result_admin", "return").unwrap();
+    fail::cfg("on_address_apply_result_normal", "return(false)").unwrap();
+    fail::cfg("on_address_apply_result_admin", "return(false)").unwrap();
     fail::cfg("on_handle_admin_raft_cmd_no_persist", "return").unwrap();
 
     // Try to start this node, return after persisted some keys.

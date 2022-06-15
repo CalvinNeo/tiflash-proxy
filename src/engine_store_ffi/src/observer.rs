@@ -108,19 +108,19 @@ impl TiFlashObserver {
         );
     }
 
-    fn write_apply_state(&self, region_id: u64, state: &RaftApplyState) {
-        // In original implementation, we write to WriteBatch.
-        // However, we write here.
-        self.engine
-            .put_msg_cf(
-                engine_traits::CF_RAFT,
-                &keys::apply_state_key(region_id),
-                state,
-            )
-            .unwrap_or_else(|e| {
-                panic!("failed to save apply state to engine, error: {:?}", e);
-            });
-    }
+    // fn write_apply_state(&self, region_id: u64, state: &RaftApplyState) {
+    //     // In original implementation, we write to WriteBatch.
+    //     // However, we write directly to db.
+    //     self.engine
+    //         .put_msg_cf(
+    //             engine_traits::CF_RAFT,
+    //             &keys::apply_state_key(region_id),
+    //             state,
+    //         )
+    //         .unwrap_or_else(|e| {
+    //             panic!("failed to save apply state to engine, error: {:?}", e);
+    //         });
+    // }
 
     fn handle_ingest_sst_for_engine_store(
         &self,
@@ -189,8 +189,8 @@ impl QueryObserver for TiFlashObserver {
         cmd: &Cmd,
         apply_state: &RaftApplyState,
         region_state: &RegionState,
-    ) {
-        fail::fail_point!("on_address_apply_result_normal", |_| {});
+    ) -> bool {
+        fail::fail_point!("on_address_apply_result_normal", |e| { e.unwrap().parse::<bool>().unwrap() });
         const NONE_STR: &str = "";
         let requests = cmd.request.get_requests();
         let response = &cmd.response;
@@ -291,13 +291,7 @@ impl QueryObserver for TiFlashObserver {
                 EngineStoreApplyRes::NotFound => false,
             }
         };
-        if persist {
-            if !region_state.pending_remove {
-                info!("persist apply state for write"; "region_id" => ob_ctx.region().get_id(),
-                        "peer_id" => region_state.peer_id, "state" => ?apply_state);
-                self.write_apply_state(ob_ctx.region().get_id(), apply_state);
-            }
-        }
+        persist
     }
 }
 
@@ -323,8 +317,8 @@ impl AdminObserver for TiFlashObserver {
         cmd: &Cmd,
         apply_state: &RaftApplyState,
         region_state: &RegionState,
-    ) {
-        fail::fail_point!("on_address_apply_result_admin", |_| {});
+    ) -> bool {
+        fail::fail_point!("on_address_apply_result_admin", |e| { e.unwrap().parse::<bool>().unwrap() });
         let request = cmd.request.get_admin_request();
         let response = &cmd.response;
         let admin_reponse = response.get_admin_response();
@@ -393,7 +387,7 @@ impl AdminObserver for TiFlashObserver {
                 }
             }
         };
-        let persisted = match flash_res {
+        let persist = match flash_res {
             EngineStoreApplyRes::None => {
                 if cmd_type == AdminCmdType::CompactLog {
                     error!("applying CompactLog should not return None"; "region_id" => ob_ctx.region().get_id(),
@@ -403,9 +397,6 @@ impl AdminObserver for TiFlashObserver {
             }
             EngineStoreApplyRes::Persist => {
                 if !region_state.pending_remove {
-                    info!("persist apply state for admin"; "region_id" => ob_ctx.region().get_id(),
-                            "peer_id" => region_state.peer_id, "state" => ?apply_state);
-                    self.write_apply_state(ob_ctx.region().get_id(), apply_state);
                     true
                 } else {
                     false
@@ -422,6 +413,7 @@ impl AdminObserver for TiFlashObserver {
                 false
             }
         };
+        persist
     }
 }
 
