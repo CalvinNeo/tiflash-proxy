@@ -169,7 +169,7 @@ impl Coprocessor for TiFlashObserver {
 
 impl QueryObserver for TiFlashObserver {
     fn on_empty_cmd(&self, ob_ctx: &mut ObserverContext<'_>, index: u64, term: u64) {
-        fail::fail_point!("on_empty_cmd", |_| {});
+        fail::fail_point!("on_empty_cmd_normal", |_| {});
         debug!("encounter empty cmd, maybe due to leadership change";
             "region" => ?ob_ctx.region(),
             "index" => index,
