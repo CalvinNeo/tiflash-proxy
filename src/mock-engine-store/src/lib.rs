@@ -39,7 +39,27 @@ pub struct Region {
     // We will record the key in pending_delete, so we can delete it from disk when flushing.
     pub pending_delete: [HashSet<Vec<u8>>; 3],
     pub pending_write: [BTreeMap<Vec<u8>, Vec<u8>>; 3],
-    apply_state: kvproto::raft_serverpb::RaftApplyState,
+    pub apply_state: kvproto::raft_serverpb::RaftApplyState,
+    pub applied_term: u64,
+}
+
+impl Region {
+    fn set_applied(&mut self, index: u64, term:u64) {
+        self.apply_state.set_applied_index(index);
+        self.applied_term = term;
+    }
+
+    fn new(meta: kvproto::metapb::Region) -> Self {
+        Region {
+            region: meta,
+            peer: Default::default(),
+            data: Default::default(),
+            pending_delete: Default::default(),
+            pending_write: Default::default(),
+            apply_state: Default::default(),
+            applied_term: 0,
+        }
+    }
 }
 
 pub struct EngineStoreServer {
@@ -110,9 +130,7 @@ pub fn make_new_region(
         .apply_state
         .mut_truncated_state()
         .set_term(raftstore::store::RAFT_INIT_LOG_TERM);
-    region
-        .apply_state
-        .set_applied_index(raftstore::store::RAFT_INIT_LOG_INDEX);
+    region.set_applied(raftstore::store::RAFT_INIT_LOG_INDEX, raftstore::store::RAFT_INIT_LOG_TERM);
     region
 }
 
@@ -148,7 +166,7 @@ impl EngineStoreServerWrap {
                     let old_peer_id = {
                         let old_region = engine_store_server.kvstore.get_mut(&region_id).unwrap();
                         old_region.region = new_region_meta.clone();
-                        old_region.apply_state.set_applied_index(header.index);
+                        region.set_applied(header.index, header.term);
                         old_region.peer.get_store_id()
                     };
 
@@ -232,7 +250,7 @@ impl EngineStoreServerWrap {
 
                     {
                         let region = engine_store_server.kvstore.get_mut(&region_id).unwrap();
-                        region.apply_state.set_applied_index(header.index);
+                        region.set_applied(header.index, header.term);
                     }
                     // We don't handle MergeState and PeerState here
                 },
@@ -282,7 +300,7 @@ impl EngineStoreServerWrap {
                                 target_region_meta.get_end_key()
                             );
                         }
-                        target_region.apply_state.set_applied_index(header.index);
+                        target_region.set_applied(header.index, header.term);
                     }
                     let to_remove = req.get_commit_merge().get_source().get_id();
                     engine_store_server
@@ -294,9 +312,11 @@ impl EngineStoreServerWrap {
                     let region_meta = &mut region.region;
                     let new_version = region_meta.get_region_epoch().get_version() + 1;
 
-                    region.apply_state.set_applied_index(header.index);
+                    region.set_applied(header.index, header.term);
                 },
-                _ => {},
+                _ => {
+                    region.set_applied(header.index, header.term);
+                },
             }
             // do persist or not
             match req.get_cmd_type() {
@@ -311,12 +331,14 @@ impl EngineStoreServerWrap {
                 },
             }
         };
+
         let res = match (*self.engine_store_server).kvstore.entry(region_id) {
             std::collections::hash_map::Entry::Occupied(mut o) => {
                 do_handle_admin_raft_cmd(o.get_mut(), &mut (*self.engine_store_server))
             }
             std::collections::hash_map::Entry::Vacant(v) => {
-                // Currently, we don't handle commands like BatchSplit,
+                // Currently in tests, we don't handle commands like BatchSplit,
+                // and sometimes we don't bootstrap region 1,
                 // so it is normal if we find no region.
                 warn!("region {} not found, create for {}", region_id, node_id);
                 let new_region = v.insert(Default::default());
@@ -420,7 +442,8 @@ impl EngineStoreServerWrap {
                     }
                 }
             }
-            // Do not advance apply index
+            // Advance apply index, but do not persist
+            region.set_applied(header.index, header.term);
             ffi_interfaces::EngineStoreApplyRes::None
         };
 
@@ -776,27 +799,13 @@ unsafe extern "C" fn ffi_pre_handle_snapshot(
 
     let req_id = req.id;
 
-    let mut region = Box::new(
-    Region {
-        region: req,
-        peer: Default::default(),
-        data: Default::default(),
-        pending_delete: Default::default(),
-        pending_write: Default::default(),
-        apply_state: Default::default(),
-    });
+    let mut region = Box::new(Region::new(req));
 
     debug!("pre handle snaps with len {} peer_id {} region {:?}", snaps.len, peer_id, region.region);
     for i in 0..snaps.len {
         let mut snapshot = snaps.views.add(i as usize);
         let mut sst_reader =
             SSTReader::new(proxy_helper, &*(snapshot as *mut ffi_interfaces::SSTView));
-
-        {
-            region.apply_state.set_applied_index(index);
-            region.apply_state.mut_truncated_state().set_index(index);
-            region.apply_state.mut_truncated_state().set_term(term);
-        }
 
         while sst_reader.remained() {
             let key = sst_reader.key();
@@ -808,6 +817,12 @@ unsafe extern "C" fn ffi_pre_handle_snapshot(
             write_kv_in_mem(&mut region, cf_index as usize, key.to_slice(), value.to_slice());
             sst_reader.next();
         }
+    }
+
+    {
+        region.set_applied(index, term);
+        region.apply_state.mut_truncated_state().set_index(index);
+        region.apply_state.mut_truncated_state().set_term(term);
     }
 
     ffi_interfaces::RawCppPtr {
@@ -889,7 +904,7 @@ unsafe extern "C" fn ffi_handle_ingest_sst(
     }
 
     {
-        region.apply_state.set_applied_index(index);
+        region.set_applied(header.index, header.term);
         region.apply_state.mut_truncated_state().set_index(index);
         region.apply_state.mut_truncated_state().set_term(term);
     }

@@ -168,6 +168,21 @@ impl Coprocessor for TiFlashObserver {
 }
 
 impl QueryObserver for TiFlashObserver {
+    fn on_empty_cmd(&self, ob_ctx: &mut ObserverContext<'_>, index: u64, term: u64) {
+        fail::fail_point!("on_empty_cmd", |_| {});
+        debug!("encounter empty cmd, maybe due to leadership change";
+            "region" => ?ob_ctx.region(),
+            "index" => index,
+            "term" => term,
+        );
+        // We still need to pass a dummy cmd, to forward updates.
+        let cmd_dummy = crate::WriteCmds::new();
+        self.engine_store_server_helper.handle_write_raft_cmd(
+            &cmd_dummy,
+            RaftCmdHeader::new(ob_ctx.region().get_id(), index, term),
+        );
+    }
+
     fn address_apply_result(
         &self,
         ob_ctx: &mut ObserverContext<'_>,
@@ -178,14 +193,14 @@ impl QueryObserver for TiFlashObserver {
         fail::fail_point!("on_address_apply_result_normal", |_| {});
         const NONE_STR: &str = "";
         let requests = cmd.request.get_requests();
-        let response = cmd.response;
+        let response = &cmd.response;
         if response.get_header().has_error() {
             debug!("error occurs when apply_raft_cmd, {:?}", response.get_header().get_error());
             // We still need to pass a dummy cmd, to forward updates.
             let cmd_dummy = crate::WriteCmds::new();
-            apply_ctx.engine_store_server_helper.handle_write_raft_cmd(
-                &cmds,
-                RaftCmdHeader::new(self.region.get_id(), cmd.index, cmd.term),
+            self.engine_store_server_helper.handle_write_raft_cmd(
+                &cmd_dummy,
+                RaftCmdHeader::new(ob_ctx.region().get_id(), cmd.index, cmd.term),
             );
         }
 
@@ -311,8 +326,19 @@ impl AdminObserver for TiFlashObserver {
     ) {
         fail::fail_point!("on_address_apply_result_admin", |_| {});
         let request = cmd.request.get_admin_request();
-        let response = cmd.response.get_admin_response();
+        let response = &cmd.response;
+        let admin_reponse = response.get_admin_response();
         let cmd_type = request.get_cmd_type();
+
+        if response.get_header().has_error() {
+            debug!("error occurs when apply_raft_cmd, {:?}", response.get_header().get_error());
+            // We still need to pass a dummy cmd, to forward updates.
+            let cmd_dummy = crate::WriteCmds::new();
+            self.engine_store_server_helper.handle_write_raft_cmd(
+                &cmd_dummy,
+                RaftCmdHeader::new(ob_ctx.region().get_id(), cmd.index, cmd.term),
+            );
+        }
 
         match cmd_type {
             AdminCmdType::CompactLog | AdminCmdType::CommitMerge => {}
@@ -361,7 +387,7 @@ impl AdminObserver for TiFlashObserver {
                 None => {
                     self.engine_store_server_helper.handle_admin_raft_cmd(
                         &request,
-                        &response,
+                        &admin_reponse,
                         RaftCmdHeader::new(ob_ctx.region().get_id(), cmd.index, cmd.term),
                     )
                 }
