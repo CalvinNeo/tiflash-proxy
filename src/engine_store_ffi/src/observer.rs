@@ -109,6 +109,8 @@ impl TiFlashObserver {
     }
 
     fn write_apply_state(&self, region_id: u64, state: &RaftApplyState) {
+        // In original implementation, we write to WriteBatch.
+        // However, we write here.
         self.engine
             .put_msg_cf(
                 engine_traits::CF_RAFT,
@@ -116,7 +118,7 @@ impl TiFlashObserver {
                 state,
             )
             .unwrap_or_else(|e| {
-                panic!("failed to save apply state to write batch, error: {:?}", e);
+                panic!("failed to save apply state to engine, error: {:?}", e);
             });
     }
 
@@ -176,6 +178,16 @@ impl QueryObserver for TiFlashObserver {
         fail::fail_point!("on_address_apply_result_normal", |_| {});
         const NONE_STR: &str = "";
         let requests = cmd.request.get_requests();
+        let response = cmd.response;
+        if response.get_header().has_error() {
+            debug!("error occurs when apply_raft_cmd, {:?}", response.get_header().get_error());
+            // We still need to pass a dummy cmd, to forward updates.
+            let cmd_dummy = crate::WriteCmds::new();
+            apply_ctx.engine_store_server_helper.handle_write_raft_cmd(
+                &cmds,
+                RaftCmdHeader::new(self.region.get_id(), cmd.index, cmd.term),
+            );
+        }
 
         let mut ssts = vec![];
         let mut cmds = crate::WriteCmds::with_capacity(requests.len());
@@ -213,37 +225,39 @@ impl QueryObserver for TiFlashObserver {
             }
         }
 
-        if !ssts.is_empty() {
+        let persist = if !ssts.is_empty() {
             assert_eq!(cmds.len(), 0);
-            let persist =
-                match self.handle_ingest_sst_for_engine_store(ob_ctx, &ssts, cmd.index, cmd.term) {
-                    EngineStoreApplyRes::None => {
-                        // Before, BR/Lightning may let ingest sst cmd contain only one cf,
-                        // which may cause that tiflash can not flush all region cache into column.
-                        // so we have a optimization proxy@cee1f003.
-                        // However, since this is fixed in tiflash#1811, this optimization is no longer necessary.
-                        error!(
-                            "should not skip persist for ingest sst";
-                            "region_id" => ob_ctx.region().get_id(),
-                            "peer_id" => region_state.peer_id,
-                            "term" => cmd.term,
-                            "index" => cmd.index,
-                            "ssts_to_clean" => ?ssts
-                        );
-                        true
-                    }
-                    EngineStoreApplyRes::NotFound | EngineStoreApplyRes::Persist => {
-                        info!(
-                            "ingest sst success";
-                            "region_id" => ob_ctx.region().get_id(),
-                            "peer_id" => region_state.peer_id,
-                            "term" => cmd.term,
-                            "index" => cmd.index,
-                            "ssts_to_clean" => ?ssts
-                        );
-                        true
-                    }
-                };
+            match self.handle_ingest_sst_for_engine_store(ob_ctx, &ssts, cmd.index, cmd.term) {
+                EngineStoreApplyRes::None => {
+                    // Before, BR/Lightning may let ingest sst cmd contain only one cf,
+                    // which may cause that TiFlash can not flush all region cache into column.
+                    // so we have a optimization proxy@cee1f003.
+                    // However, since this is fixed in tiflash#1811,
+                    // this optimization is no longer necessary.
+                    // We will print a error here.
+                    error!(
+                        "should not skip persist for ingest sst";
+                        "region_id" => ob_ctx.region().get_id(),
+                        "peer_id" => region_state.peer_id,
+                        "term" => cmd.term,
+                        "index" => cmd.index,
+                        "ssts_to_clean" => ?ssts,
+                        "sst cf" => ssts.len(),
+                    );
+                    false
+                }
+                EngineStoreApplyRes::NotFound | EngineStoreApplyRes::Persist => {
+                    info!(
+                        "ingest sst success";
+                        "region_id" => ob_ctx.region().get_id(),
+                        "peer_id" => region_state.peer_id,
+                        "term" => cmd.term,
+                        "index" => cmd.index,
+                        "ssts_to_clean" => ?ssts
+                    );
+                    true
+                }
+            }
         } else {
             let flash_res = {
                 info!("!!!! write cmds index {} term {} data {:?} peer_id {}", cmd.index, cmd.term, cmds, region_state.peer_id);
@@ -252,22 +266,22 @@ impl QueryObserver for TiFlashObserver {
                     RaftCmdHeader::new(ob_ctx.region().get_id(), cmd.index, cmd.term),
                 )
             };
-            let persisted = match flash_res {
+            match flash_res {
                 EngineStoreApplyRes::None => {
                     false
                 }
                 EngineStoreApplyRes::Persist => {
-                    if !region_state.pending_remove {
-                        info!("persist apply state for write"; "region_id" => ob_ctx.region().get_id(),
-                            "peer_id" => region_state.peer_id, "state" => ?apply_state);
-                        self.write_apply_state(ob_ctx.region().get_id(), apply_state);
-                        true
-                    } else {
-                        false
-                    }
+                    true
                 }
                 EngineStoreApplyRes::NotFound => false,
-            };
+            }
+        };
+        if persist {
+            if !region_state.pending_remove {
+                info!("persist apply state for write"; "region_id" => ob_ctx.region().get_id(),
+                        "peer_id" => region_state.peer_id, "state" => ?apply_state);
+                self.write_apply_state(ob_ctx.region().get_id(), apply_state);
+            }
         }
     }
 }
@@ -324,9 +338,6 @@ impl AdminObserver for TiFlashObserver {
             }
         }
 
-        // TODO revert ApplyState for CompactLog
-
-
         let mut new_response = None;
         match cmd_type {
             AdminCmdType::CommitMerge | AdminCmdType::PrepareMerge
@@ -359,7 +370,8 @@ impl AdminObserver for TiFlashObserver {
         let persisted = match flash_res {
             EngineStoreApplyRes::None => {
                 if cmd_type == AdminCmdType::CompactLog {
-                    // TODO need to revert
+                    error!("applying CompactLog should not return None"; "region_id" => ob_ctx.region().get_id(),
+                            "peer_id" => region_state.peer_id, "state" => ?apply_state);
                 }
                 false
             }
