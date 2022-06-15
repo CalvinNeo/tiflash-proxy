@@ -1,3 +1,3 @@
 mod ingest;
-mod normal;
+pub mod normal;
 mod replica_read;

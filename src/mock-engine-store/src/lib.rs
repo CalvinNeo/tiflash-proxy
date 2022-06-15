@@ -863,13 +863,14 @@ unsafe extern "C" fn ffi_handle_ingest_sst(
     let region_id = header.region_id;
     let kvstore = &mut (*store.engine_store_server).kvstore;
     let kv = &mut (*store.engine_store_server).engines.as_mut().unwrap().kv;
-    let region = kvstore.get_mut(&region_id).unwrap().as_mut();
+    let region = kvstore.get_mut(&region_id).unwrap();
 
     let index = header.index;
     let term = header.term;
 
     for i in 0..snaps.len {
         let mut snapshot = snaps.views.add(i as usize);
+        let path = std::str::from_utf8_unchecked((*snapshot).path.to_slice());
         let mut sst_reader =
             SSTReader::new(proxy_helper, &*(snapshot as *mut ffi_interfaces::SSTView));
 
@@ -877,12 +878,12 @@ unsafe extern "C" fn ffi_handle_ingest_sst(
             let key = sst_reader.key();
             let value = sst_reader.value();
 
-            let cf_index = (*snapshot).type_ as u8;
-
-            let tikv_key = keys::data_key(key.to_slice());
+            let cf_index = (*snapshot).type_ as usize;
             let cf_name = cf_to_name((*snapshot).type_);
 
-            kv.put_cf(cf_name, &tikv_key, &value.to_slice());
+            let tikv_key = keys::data_key(key.to_slice());
+
+            write_kv_in_mem(region, cf_index, key.to_slice(), value.to_slice());
             sst_reader.next();
         }
     }
@@ -893,6 +894,7 @@ unsafe extern "C" fn ffi_handle_ingest_sst(
         region.apply_state.mut_truncated_state().set_term(term);
     }
 
+    EngineStoreServerWrap::write_to_db_data(&mut (*store.engine_store_server), region);
     ffi_interfaces::EngineStoreApplyRes::Persist
 }
 

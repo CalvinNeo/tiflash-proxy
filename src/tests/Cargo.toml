@@ -86,3 +86,5 @@ test_util = { path = "../../contrib/tikv/components/test_util", default-features
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 collections = { path = "../../contrib/tikv/components/collections" }
 log_wrappers = { path = "../../contrib/tikv/components/log_wrappers" }
+txn_types = { path = "../../contrib/tikv/components/txn_types", default-features = false }
+test_sst_importer = { path = "../../contrib/tikv/components/test_sst_importer", default-features = false }

@@ -122,7 +122,7 @@ pub fn must_get_mem(engine_store_server: &Box<mock_engine_store::EngineStoreServ
     )
 }
 
-fn check_key(cluster: &mock_engine_store::mock_cluster::Cluster<NodeCluster>,
+pub fn check_key(cluster: &mock_engine_store::mock_cluster::Cluster<NodeCluster>,
              k: &[u8], v: &[u8], in_mem: Option<bool>, in_disk: Option<bool>, engines: Option<Vec<u64>>) {
     let region_id = cluster.raw.get_region(k).get_id();
     let engine_keys = {

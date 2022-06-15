@@ -136,7 +136,10 @@ impl TiFlashObserver {
                 panic!("should not ingest sst of lock cf");
             }
 
-            // We have already `check_sst_for_ingestion` in handle_ingest_sst
+            // We still need this to filter error ssts.
+            if let Err(e) = raftstore::store::fsm::apply::check_sst_for_ingestion(sst, &ob_ctx.region()) {
+                break;
+            }
 
             ssts_wrap.push((
                 self.sst_importer.get_path(sst),
@@ -148,10 +151,11 @@ impl TiFlashObserver {
             sst_views.push((path.to_str().unwrap().as_bytes(), *cf));
         }
 
-        self.engine_store_server_helper.handle_ingest_sst(
+        let res = self.engine_store_server_helper.handle_ingest_sst(
             sst_views,
             RaftCmdHeader::new(ob_ctx.region().get_id(), index, term),
-        )
+        );
+        res
     }
 }
 
@@ -191,6 +195,7 @@ impl QueryObserver for TiFlashObserver {
                     cmds.push(key, NONE_STR.as_ref(), WriteCmdType::Del, cf);
                 }
                 CmdType::IngestSst => {
+                    debug!("!!!!! handle ingest sst");
                     ssts.push(engine_traits::SSTMetaInfo {
                         total_bytes: 0,
                         total_kvs: 0,
