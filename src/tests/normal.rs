@@ -251,6 +251,7 @@ struct States {
     in_memory_applied_term: u64,
     in_disk_apply_state: RaftApplyState,
     in_disk_region_state: RegionLocalState,
+    ident: StoreIdent,
 }
 
 fn collect_all_states(cluster: &mock_engine_store::mock_cluster::Cluster<NodeCluster>,
@@ -268,11 +269,17 @@ fn collect_all_states(cluster: &mock_engine_store::mock_cluster::Cluster<NodeClu
 
         let region = server.kvstore.get(&region_id).unwrap();
 
+        let ident = match engine.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY) {
+            Ok(Some(i)) => (i),
+            _ => unreachable!(),
+        };
+
         prev_state.insert(*id, States {
             in_memory_apply_state: region.apply_state.clone(),
             in_memory_applied_term: region.applied_term,
             in_disk_apply_state: get_apply_state(&engine, region_id),
             in_disk_region_state: get_region_local_state(&engine, region_id),
+            ident: ident
         });
     }
     prev_state
@@ -295,30 +302,18 @@ fn test_kv_write() {
         let k = format!("k{}", i);
         let v = format!("v{}", i);
         cluster.raw.must_put(k.as_bytes(), v.as_bytes());
-        for id in cluster.raw.engines.keys() {
-            let engine = &cluster.raw.get_engine(*id);
-            // We can get nothing, since engine_tiflash filters all data.
-            must_get_none(engine, k.as_bytes());
-        }
+    }
+
+    // Since we disable all observers, we can get nothing in either memory and disk.
+    for i in 0..10 {
+        let k = format!("k{}", i);
+        let v = format!("v{}", i);
+        check_key(&cluster, k.as_bytes(), v.as_bytes(), Some(false), Some(false), None);
     }
 
     // We can read initial raft state, since we don't persist meta either.
-    let mut prev_apply_state: HashMap<u64, RaftApplyState> = HashMap::default();
-    for id in cluster.raw.engines.keys() {
-        let r1 = cluster.raw.get_region(b"k1").get_id();
-        let db = cluster.raw.get_engine(*id);
-        let engine = engine_rocks::RocksEngine::from_db(db);
-
-        // We can still get RegionLocalState
-        let region_local_state = get_region_local_state(&engine, r1);
-        let apply_state = get_apply_state(&engine, r1);
-        prev_apply_state.insert(*id, apply_state);
-
-        match engine.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY) {
-            Ok(Some(_)) => (),
-            _ => unreachable!(),
-        };
-    }
+    let r1 = cluster.raw.get_region(b"k1").get_id();
+    let prev_states = collect_all_states(&cluster, r1);
 
     fail::remove("on_address_apply_result_normal");
     fail::remove("on_address_apply_result_admin");
@@ -328,21 +323,34 @@ fn test_kv_write() {
         cluster.raw.must_put(k.as_bytes(), v.as_bytes());
     }
 
+    // Since we enable all observers, we can get in memory, but nothing in disk since we don't persist.
     for i in 10..20 {
         let k = format!("k{}", i);
         let v = format!("v{}", i);
         check_key(&cluster, k.as_bytes(), v.as_bytes(), Some(true), Some(false), None);
     }
 
+    let new_states = collect_all_states(&cluster, r1);
+    for id in cluster.raw.engines.keys() {
+        assert_ne!(&prev_states.get(id).unwrap().in_memory_apply_state,
+                   &new_states.get(id).unwrap().in_memory_apply_state);
+        assert_eq!(&prev_states.get(id).unwrap().in_disk_apply_state,
+                   &new_states.get(id).unwrap().in_disk_apply_state);
+    }
+
     fail::remove("on_handle_admin_raft_cmd_no_persist");
 
+
+    let prev_states = collect_all_states(&cluster, r1);
+    // Write more after we force persist when compact log.
     for i in 20..30 {
         let k = format!("k{}", i);
         let v = format!("v{}", i);
         cluster.raw.must_put(k.as_bytes(), v.as_bytes());
     }
 
-    // We can read from mock-store's memory, but still not from disk, since we have not persist yet.
+    // We can read from mock-store's memory, we are not sure if we can read from disk,
+    // since there may be or may not be a compact log.
     for i in 11..30 {
         let k = format!("k{}", i);
         let v = format!("v{}", i);
@@ -366,13 +374,14 @@ fn test_kv_write() {
         check_key(&cluster, k.as_bytes(), v.as_bytes(), Some(true), Some(true), None);
     }
 
-    for id in cluster.raw.engines.keys() {
-        let r1 = cluster.raw.get_region(b"k1").get_id();
-        let db = cluster.raw.get_engine(*id);
-        let engine = engine_rocks::RocksEngine::from_db(db);
+    let new_states = collect_all_states(&cluster, r1);
 
-        let apply_state = get_apply_state(&engine, r1);
-        assert_ne!(prev_apply_state.get(id).unwrap(), &apply_state);
+    // apply_state is changed in memory, and persisted.
+    for id in cluster.raw.engines.keys() {
+        assert_ne!(&prev_states.get(id).unwrap().in_memory_apply_state,
+                   &new_states.get(id).unwrap().in_memory_apply_state);
+        assert_ne!(&prev_states.get(id).unwrap().in_disk_apply_state,
+                   &new_states.get(id).unwrap().in_disk_apply_state);
     }
 
     fail::remove("on_handle_admin_raft_cmd_no_persist");
