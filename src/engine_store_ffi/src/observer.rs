@@ -498,7 +498,7 @@ impl ApplySnapshotObserver for TiFlashObserver {
         let mut ctx = lock
             .borrow_mut();
 
-        b.tracer.insert(snap_key.clone(), e.clone());
+        ctx.tracer.insert(snap_key.clone(), e.clone());
     }
 
     fn post_apply_snapshot(
@@ -535,7 +535,6 @@ impl ApplySnapshotObserver for TiFlashObserver {
                     },
                 };
                 self.engine.pending_applies_count.fetch_sub(1, Ordering::Relaxed);
-                b.tracer.remove(snap_key);
             }
             None => {
                 panic!("can not get snapshot of {:?} for region {:?}", snap_key, ob_ctx.region());
