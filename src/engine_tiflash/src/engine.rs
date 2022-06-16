@@ -30,6 +30,19 @@ use raftstore::store::SnapKey;
 use std::fmt::Formatter;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+pub struct FsStatsExt {
+    pub used: u64,
+    pub capacity: u64,
+    pub available: u64,
+}
+
+pub trait FFIHubInner {
+    fn get_store_stats(&self) -> FsStatsExt;
+}
+
+pub trait FFIHub: FFIHubInner + Send + Sync {
+}
+
 #[derive(Clone)]
 pub struct RocksEngine {
     // Must ensure rocks is the first field, for RocksEngine::from_ref
@@ -38,6 +51,7 @@ pub struct RocksEngine {
     pub apply_snap_pool: Option<Arc<ThreadPool<TaskCell>>>,
     pub pool_capacity: usize,
     pub pending_applies_count: Arc<AtomicUsize>,
+    pub ffi_hub: Option<Arc<dyn FFIHubInner + Send + Sync>>,
 }
 
 impl std::fmt::Debug for RocksEngine {
@@ -50,7 +64,7 @@ impl std::fmt::Debug for RocksEngine {
 }
 
 impl RocksEngine {
-    pub fn init(&mut self, engine_store_server_helper: isize, snap_handle_pool_size: usize) {
+    pub fn init(&mut self, engine_store_server_helper: isize, snap_handle_pool_size: usize, ffi_hub: Option<Arc<dyn FFIHubInner + Send + Sync>>) {
         self.engine_store_server_helper = engine_store_server_helper;
         let snap_pool = Builder::new(tikv_util::thd_name!("region-task"))
             .max_thread_count(snap_handle_pool_size)
@@ -58,6 +72,7 @@ impl RocksEngine {
         self.apply_snap_pool = Some(Arc::new(snap_pool));
         self.pool_capacity = snap_handle_pool_size;
         self.pending_applies_count.store(0, Ordering::Relaxed);
+        self.ffi_hub = ffi_hub;
     }
 
     pub fn from_db(db: Arc<DB>) -> Self {
@@ -70,6 +85,7 @@ impl RocksEngine {
             apply_snap_pool: None,
             pool_capacity: 0,
             pending_applies_count: Arc::new(AtomicUsize::new(0)),
+            ffi_hub: None,
         }
     }
 

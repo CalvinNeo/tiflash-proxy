@@ -183,7 +183,13 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
             .as_mut()
             .unwrap()
             .engine_store_server_helper;
+
+        let helper = engine_store_ffi::gen_engine_store_server_helper(engines.kv.engine_store_server_helper);
+        let ffi_hub = Arc::new(engine_store_ffi::observer::TiFlashFFIHub {
+            engine_store_server_helper: helper,
+        });
         assert_ne!(engines.kv.engine_store_server_helper, 0);
+        engines.kv.ffi_hub = Some(ffi_hub);
 
         // replace self.raw.create_engine
         self.raw.dbs.push(engines.clone());
@@ -366,7 +372,7 @@ pub fn create_tiflash_test_engine(
     );
 
     let mut engine = engine_tiflash::RocksEngine::from_db(engine);
-    engine.init(0, 2);
+    engine.init(0, 2, None);
     let mut raft_engine = engine_rocks::RocksEngine::from_db(raft_engine);
     let shared_block_cache = cache.is_some();
     engine.set_shared_block_cache(shared_block_cache);

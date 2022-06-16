@@ -25,11 +25,35 @@ use tikv_util::{error, info, warn, debug};
 use yatp::pool::{Builder, ThreadPool};
 use yatp::task::future::TaskCell;
 use std::ops::{Deref, DerefMut};
+use crate::interfaces::root::DB as ffi_interfaces;
+use engine_tiflash::FsStatsExt;
 
 pub struct PtrWrapper(crate::RawCppPtr);
 
 unsafe impl Send for PtrWrapper {}
 unsafe impl Sync for PtrWrapper {}
+
+impl Into<engine_tiflash::FsStatsExt> for ffi_interfaces::StoreStats {
+    fn into(self) -> FsStatsExt {
+        FsStatsExt {
+            available: self.fs_stats.avail_size,
+            capacity: self.fs_stats.capacity_size,
+            used: self.fs_stats.used_size,
+        }
+    }
+}
+
+pub struct TiFlashFFIHub {
+    pub engine_store_server_helper: &'static crate::EngineStoreServerHelper,
+}
+unsafe impl Send for TiFlashFFIHub {}
+unsafe impl Sync for TiFlashFFIHub {}
+
+impl engine_tiflash::FFIHubInner for TiFlashFFIHub {
+    fn get_store_stats(&self) -> engine_tiflash::FsStatsExt {
+        self.engine_store_server_helper.handle_compute_store_stats().into()
+    }
+}
 
 #[derive(Default, Debug)]
 pub struct PrehandleContext {

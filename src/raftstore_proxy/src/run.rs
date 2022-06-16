@@ -62,9 +62,13 @@ pub fn init_tiflash_engines<CER: ConfiguredRaftEngine>(
     )
     .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
 
+    let helper = engine_store_ffi::gen_engine_store_server_helper(engine_store_server_helper);
+    let ffi_hub = Arc::new(engine_store_ffi::observer::TiFlashFFIHub {
+        engine_store_server_helper: helper,
+    });
     // engine_tiflash::RocksEngine has engine_rocks::RocksEngine inside
     let mut kv_engine = engine_tiflash::RocksEngine::from_db(Arc::new(kv_engine));
-    kv_engine.init(engine_store_server_helper, tikv.proxy_config.snap_handle_pool_size);
+    kv_engine.init(engine_store_server_helper, tikv.proxy_config.snap_handle_pool_size, Some(ffi_hub.clone()));
     let engines = Engines::new(kv_engine, raft_engine);
 
     let cfg_controller = tikv.cfg_controller.as_mut().unwrap();
