@@ -290,7 +290,7 @@ impl Simulator<engine_tiflash::RocksEngine> for NodeCluster {
             f(node_id, &mut coprocessor_host);
         }
 
-        let tiflash_ob = engine_store_ffi::observer::TiFlashObserver::new(
+        let tiflash_ob = proxy_core::observer::TiFlashObserver::new(
             node_id,
             engines.kv.clone(),
             importer.clone(),

@@ -57,6 +57,7 @@ txn_types = { path = "../../contrib/tikv/components/txn_types", default-features
 resolved_ts = { path = "../../contrib/tikv/components/resolved_ts" }
 security = { path = "../../contrib/tikv/components/security", default-features = false }
 api_version = { path = "../../contrib/tikv/components/api_version" }
+proxy_core = { path = "../proxy_core", default-features = false }
 
 [dependencies.rocksdb]
 git = "https://github.com/tikv/rust-rocksdb.git"

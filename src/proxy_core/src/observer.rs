@@ -1,5 +1,4 @@
-use crate::interfaces::root::DB::EngineStoreApplyRes;
-use crate::{ColumnFamilyType, RaftCmdHeader, WriteCmdType};
+use engine_store_ffi::EngineStoreApplyRes;
 use engine_traits::{Peekable, SyncMutable};
 use kvproto::metapb::Region;
 use kvproto::raft_cmdpb::{
@@ -25,8 +24,9 @@ use tikv_util::{error, info, warn, debug};
 use yatp::pool::{Builder, ThreadPool};
 use yatp::task::future::TaskCell;
 use std::ops::{Deref, DerefMut};
+use engine_store_ffi::{RaftCmdHeader, ColumnFamilyType, WriteCmdType};
 
-pub struct PtrWrapper(crate::RawCppPtr);
+pub struct PtrWrapper(engine_store_ffi::RawCppPtr);
 
 unsafe impl Send for PtrWrapper {}
 unsafe impl Sync for PtrWrapper {}
@@ -50,7 +50,7 @@ impl PrehandleTask {
 
 pub struct TiFlashObserver {
     pub peer_id: u64,
-    pub engine_store_server_helper: &'static crate::EngineStoreServerHelper,
+    pub engine_store_server_helper: &'static engine_store_ffi::EngineStoreServerHelper,
     pub engine: engine_tiflash::RocksEngine,
     pub sst_importer: Arc<SSTImporter>,
     pub pre_handle_snapshot_ctx: Arc<Mutex<RefCell<PrehandleContext>>>,
@@ -78,7 +78,7 @@ impl TiFlashObserver {
         sst_importer: Arc<SSTImporter>,
     ) -> Self {
         let engine_store_server_helper =
-            crate::gen_engine_store_server_helper(engine.engine_store_server_helper);
+            engine_store_ffi::gen_engine_store_server_helper(engine.engine_store_server_helper);
         TiFlashObserver {
             peer_id,
             engine_store_server_helper,
@@ -145,7 +145,7 @@ impl TiFlashObserver {
 
             ssts_wrap.push((
                 self.sst_importer.get_path(sst),
-                crate::name_to_cf(sst.get_cf_name()),
+                engine_store_ffi::name_to_cf(sst.get_cf_name()),
             ));
         }
 
@@ -176,7 +176,7 @@ impl QueryObserver for TiFlashObserver {
             "term" => term,
         );
         // We still need to pass a dummy cmd, to forward updates.
-        let cmd_dummy = crate::WriteCmds::new();
+        let cmd_dummy = engine_store_ffi::WriteCmds::new();
         self.engine_store_server_helper.handle_write_raft_cmd(
             &cmd_dummy,
             RaftCmdHeader::new(ob_ctx.region().get_id(), index, term),
@@ -197,7 +197,7 @@ impl QueryObserver for TiFlashObserver {
         if response.get_header().has_error() {
             debug!("error occurs when apply_raft_cmd, {:?}", response.get_header().get_error());
             // We still need to pass a dummy cmd, to forward updates.
-            let cmd_dummy = crate::WriteCmds::new();
+            let cmd_dummy = engine_store_ffi::WriteCmds::new();
             self.engine_store_server_helper.handle_write_raft_cmd(
                 &cmd_dummy,
                 RaftCmdHeader::new(ob_ctx.region().get_id(), cmd.index, cmd.term),
@@ -205,19 +205,19 @@ impl QueryObserver for TiFlashObserver {
         }
 
         let mut ssts = vec![];
-        let mut cmds = crate::WriteCmds::with_capacity(requests.len());
+        let mut cmds = engine_store_ffi::WriteCmds::with_capacity(requests.len());
         for req in requests {
             let cmd_type = req.get_cmd_type();
             match cmd_type {
                 CmdType::Put => {
                     let put = req.get_put();
-                    let cf = crate::name_to_cf(put.get_cf());
+                    let cf = engine_store_ffi::name_to_cf(put.get_cf());
                     let (key, value) = (put.get_key(), put.get_value());
                     cmds.push(key, value, WriteCmdType::Put, cf);
                 }
                 CmdType::Delete => {
                     let del = req.get_delete();
-                    let cf = crate::name_to_cf(del.get_cf());
+                    let cf = engine_store_ffi::name_to_cf(del.get_cf());
                     let key = del.get_key();
                     cmds.push(key, NONE_STR.as_ref(), WriteCmdType::Del, cf);
                 }
@@ -328,7 +328,7 @@ impl AdminObserver for TiFlashObserver {
         if response.get_header().has_error() {
             debug!("error occurs when apply_raft_cmd, {:?}", response.get_header().get_error());
             // We still need to pass a dummy cmd, to forward updates.
-            let cmd_dummy = crate::WriteCmds::new();
+            let cmd_dummy = engine_store_ffi::WriteCmds::new();
             self.engine_store_server_helper.handle_write_raft_cmd(
                 &cmd_dummy,
                 RaftCmdHeader::new(ob_ctx.region().get_id(), cmd.index, cmd.term),
@@ -480,7 +480,7 @@ impl ApplySnapshotObserver for TiFlashObserver {
             //     assert!(cf_file.cf == CF_LOCK);
             // }
 
-            sst_views.push((cf_file.path.clone(), crate::name_to_cf(cf_file.cf)));
+            sst_views.push((cf_file.path.clone(), engine_store_ffi::name_to_cf(cf_file.cf)));
         }
 
         self.pre_handle_snapshot_impl(ob_ctx.region(), peer_id, snap_key, sst_views);

@@ -2,7 +2,6 @@ pub mod config;
 #[allow(dead_code)]
 pub mod interfaces;
 pub mod lock_cf_reader;
-pub mod observer;
 pub mod read_index_helper;
 pub mod status_server;
 pub mod utils;

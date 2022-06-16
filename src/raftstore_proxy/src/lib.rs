@@ -1,8 +1,10 @@
 #![feature(drain_filter)]
 
-use crate::proxy::proxy_version_info;
 use std::os::raw::{c_char, c_int};
+
 use tikv_util::*;
+
+use crate::proxy::proxy_version_info;
 
 mod proxy;
 mod rawserver;
