@@ -61,17 +61,6 @@ pub struct PrehandleContext {
     pub tracer: HashMap<SnapKey, Arc<Mutex<PrehandleTask>>>,
 }
 
-#[derive(Debug)]
-pub struct PrehandleTask {
-    pub recv: mpsc::Receiver<Option<PtrWrapper>>,
-}
-
-impl PrehandleTask {
-    fn new(recv: mpsc::Receiver<Option<PtrWrapper>>) -> Self {
-        PrehandleTask { recv }
-    }
-}
-
 pub struct TiFlashObserver {
     pub peer_id: u64,
     pub engine_store_server_helper: &'static crate::EngineStoreServerHelper,
@@ -443,42 +432,17 @@ impl AdminObserver for TiFlashObserver {
 }
 
 impl TiFlashObserver {
-    fn pre_handle_snapshot_impl(
-        &self,
-        region: &Region,
-        peer_id: u64,
-        snap_key: &SnapKey,
-        sst_views: Vec<(PathBuf, ColumnFamilyType)>,
-    ) {
-        let (sender, receiver) = mpsc::channel();
-        let idx = snap_key.idx;
-        let term = snap_key.term;
-        let engine_store_server_helper = self.engine_store_server_helper;
-        let r = region.clone();
-        let v = sst_views.clone();
-        self.engine.apply_snap_pool.as_ref().unwrap().spawn(async move {
-            let views = sst_views
-                .iter()
-                .map(|(b, c)| (b.to_str().unwrap().as_bytes(), c.clone()))
-                .collect();
 
-            fail::fail_point!("before_actually_pre_handle", |_| {});
-            let s = engine_store_server_helper.pre_handle_snapshot(&r, peer_id, views, idx, term);
-            sender.send(Some(PtrWrapper(s)));
-        });
+}
 
-        self.engine.pending_applies_count.fetch_add(1, Ordering::Relaxed);
+#[derive(Debug)]
+pub struct PrehandleTask {
+    pub recv: mpsc::Receiver<Option<PtrWrapper>>,
+}
 
-        let e = Arc::new(Mutex::new(PrehandleTask::new(receiver)));
-
-        let locked = self.pre_handle_snapshot_ctx
-            .lock()
-            .unwrap();
-
-        let mut b = locked
-            .borrow_mut();
-
-        b.tracer.insert(snap_key.clone(), e.clone());
+impl PrehandleTask {
+    fn new(recv: mpsc::Receiver<Option<PtrWrapper>>) -> Self {
+        PrehandleTask { recv }
     }
 }
 
@@ -507,7 +471,34 @@ impl ApplySnapshotObserver for TiFlashObserver {
             sst_views.push((cf_file.path.clone(), crate::name_to_cf(cf_file.cf)));
         }
 
-        self.pre_handle_snapshot_impl(ob_ctx.region(), peer_id, snap_key, sst_views);
+        let (sender, receiver) = mpsc::channel();
+        let idx = snap_key.idx;
+        let term = snap_key.term;
+        let engine_store_server_helper = self.engine_store_server_helper;
+        let region = ob_ctx.region().clone();
+        self.engine.apply_snap_pool.as_ref().unwrap().spawn(async move {
+            // The original implementation is in `Snapshot`, so we don't need to care abort lifetime.
+            let views = sst_views
+                .iter()
+                .map(|(b, c)| (b.to_str().unwrap().as_bytes(), c.clone()))
+                .collect();
+
+            fail::fail_point!("before_actually_pre_handle", |_| {});
+            let s = engine_store_server_helper.pre_handle_snapshot(&region, peer_id, views, idx, term);
+            sender.send(Some(PtrWrapper(s)));
+        });
+
+        self.engine.pending_applies_count.fetch_add(1, Ordering::Relaxed);
+
+        let e = Arc::new(Mutex::new(PrehandleTask::new(receiver)));
+
+        let lock = self.pre_handle_snapshot_ctx
+            .lock()
+            .unwrap();
+        let mut ctx = lock
+            .borrow_mut();
+
+        b.tracer.insert(snap_key.clone(), e.clone());
     }
 
     fn post_apply_snapshot(
@@ -516,9 +507,12 @@ impl ApplySnapshotObserver for TiFlashObserver {
         snap_key: &raftstore::store::SnapKey,
     ) {
         fail::fail_point!("on_ob_post_apply_snapshot", |_| {});
-        let ctx = self.pre_handle_snapshot_ctx.lock().unwrap();
-        let mut b = ctx.borrow_mut();
-        match b.tracer.get(snap_key) {
+        let maybe_snapshot = {
+            let lock = self.pre_handle_snapshot_ctx.lock().unwrap();
+            let mut ctx = lock.borrow_mut();
+            ctx.tracer.remove(snap_key)
+        };
+        match maybe_snapshot {
             Some(t) => {
                 let need_retry = match t.lock().unwrap().recv.recv() {
                     Ok(snap_ptr) => match snap_ptr {
@@ -528,20 +522,24 @@ impl ApplySnapshotObserver for TiFlashObserver {
                                 .apply_pre_handled_snapshot(s.0);
                             false
                         }
-                        None => true,
+                        None => {
+                            true
+                        },
                     },
-                    Err(_) => true,
+                    Err(_) => {
+                        debug!("background pre-handle snapshot get error";
+                            "snap_key" => ?snap_key,
+                            "region" => ?ob_ctx.region(),
+                        );
+                        true
+                    },
                 };
-                if need_retry {
-                    panic!("get prehandled snapshot failed, need prehandle again here")
-                }
+                self.engine.pending_applies_count.fetch_sub(1, Ordering::Relaxed);
+                b.tracer.remove(snap_key);
             }
             None => {
                 panic!("can not get snapshot of {:?} for region {:?}", snap_key, ob_ctx.region());
             }
-        }
-
-        self.engine.pending_applies_count.fetch_sub(1, Ordering::Relaxed);
-        b.tracer.remove(snap_key);
+        };
     }
 }
