@@ -36,6 +36,7 @@ use interfaces::root::DB::{
 use lock_cf_reader::LockCFFileReader;
 use std::pin::Pin;
 use std::time;
+use std::path::PathBuf;
 
 impl From<&[u8]> for BaseBuffView {
     fn from(s: &[u8]) -> Self {
@@ -806,12 +807,13 @@ pub unsafe fn init_engine_store_server_helper(engine_store_server_helper: *const
     *ptr = engine_store_server_helper;
 }
 
-fn into_sst_views(snaps: Vec<(&[u8], ColumnFamilyType)>) -> Vec<SSTView> {
+fn into_sst_views(snaps: &Vec<(PathBuf, ColumnFamilyType)>) -> Vec<SSTView> {
     let mut snaps_view = vec![];
     for (path, cf) in snaps {
+        let slice = path.to_str().unwrap().as_bytes();
         snaps_view.push(SSTView {
-            type_: cf,
-            path: path.into(),
+            type_: *cf,
+            path: slice.into(),
         })
     }
     snaps_view
@@ -913,7 +915,7 @@ impl EngineStoreServerHelper {
         &self,
         region: &metapb::Region,
         peer_id: u64,
-        snaps: Vec<(&[u8], ColumnFamilyType)>,
+        snaps: &Vec<(PathBuf, ColumnFamilyType)>,
         index: u64,
         term: u64,
     ) -> RawCppPtr {
@@ -943,7 +945,7 @@ impl EngineStoreServerHelper {
 
     pub fn handle_ingest_sst(
         &self,
-        snaps: Vec<(&[u8], ColumnFamilyType)>,
+        snaps: &Vec<(PathBuf, ColumnFamilyType)>,
         header: RaftCmdHeader,
     ) -> EngineStoreApplyRes {
         debug_assert!(self.fn_handle_ingest_sst.is_some());
