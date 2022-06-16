@@ -268,7 +268,8 @@ impl QueryObserver for TiFlashObserver {
                         "peer_id" => region_state.peer_id,
                         "term" => cmd.term,
                         "index" => cmd.index,
-                        "ssts_to_clean" => ?ssts
+                        "ssts_to_clean" => ?ssts,
+                        "sst cf" => ssts.len(),
                     );
                     true
                 }
@@ -454,8 +455,6 @@ impl TiFlashObserver {
             .borrow_mut();
 
         b.tracer.insert(snap_key.clone(), e.clone());
-
-        info!("!!!!! tracer len push {} {} {}", b.tracer.len(), self.peer_id, b.deref() as *const PrehandleContext as usize);
     }
 }
 
@@ -489,7 +488,7 @@ impl ApplySnapshotObserver for TiFlashObserver {
 
     fn post_apply_snapshot(
         &self,
-        _: &mut ObserverContext<'_>,
+        ob_ctx: &mut ObserverContext<'_>,
         snap_key: &raftstore::store::SnapKey,
     ) {
         fail::fail_point!("on_ob_post_apply_snapshot", |_| {});
@@ -514,12 +513,11 @@ impl ApplySnapshotObserver for TiFlashObserver {
                 }
             }
             None => {
-                panic!("Can not get snapshot of {:?}", snap_key);
+                panic!("can not get snapshot of {:?} for region {:?}", snap_key, ob_ctx.region());
             }
         }
 
         self.engine.pending_applies_count.fetch_sub(1, Ordering::Relaxed);
         b.tracer.remove(snap_key);
-        info!("!!!!! tracer len remove {} {} {}", b.tracer.len(), self.peer_id, b.deref() as *const PrehandleContext as usize);
     }
 }

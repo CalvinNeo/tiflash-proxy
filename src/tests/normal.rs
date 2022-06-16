@@ -103,6 +103,22 @@ fn test_store_setup() {
 }
 
 #[test]
+fn test_store_stats() {
+    let pd_client = Arc::new(TestPdClient::new(0, false));
+    let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
+    let mut cluster = mock_engine_store::mock_cluster::Cluster::new(0, 1, sim, pd_client.clone());
+
+    let _ = cluster.run();
+
+    for id in cluster.raw.engines.keys() {
+        let store_stats = pd_client.get_store_stats(*id);
+        assert!(store_stats.is_some());
+    }
+
+    cluster.raw.shutdown();
+}
+
+#[test]
 fn test_write_batch() {
     let pd_client = Arc::new(TestPdClient::new(0, false));
     let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
@@ -741,7 +757,7 @@ fn test_huge_snapshot() {
     cluster.raw.shutdown();
 }
 
-// #[test]
+#[test]
 fn test_concurrent_snapshot() {
     let pd_client = Arc::new(TestPdClient::new(0, false));
     let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
