@@ -205,8 +205,7 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
             engine_store_server_helper: helper,
         });
 
-        debug!("!!!!!! init engines");
-        engines.kv.init(helper_sz, 2, Some(ffi_hub));
+        engines.kv.init(helper_sz, self.proxy_cfg.snap_handle_pool_size, Some(ffi_hub));
 
         assert_ne!(engines.kv.engine_store_server_helper, 0);
 

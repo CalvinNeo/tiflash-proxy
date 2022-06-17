@@ -801,8 +801,62 @@ fn test_concurrent_snapshot() {
     cluster.raw.shutdown();
 }
 
+fn new_split_region_cluster(count: u64) -> (mock_engine_store::mock_cluster::Cluster<NodeCluster>, Arc<TestPdClient>) {
+    let (mut cluster, pd_client) = new_mock_cluster(0, 3);
+    // Disable raft log gc in this test case.
+    cluster.raw.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
+    // Disable default max peer count check.
+    pd_client.disable_default_operator();
+
+    let r1 = cluster.run_conf_change();
+    for i in 0..count {
+        let k = format!("k{:0>4}", 2 * i + 1);
+        let v = format!("v{}", 2 * i + 1);
+        cluster.raw.must_put(k.as_bytes(), v.as_bytes());
+    }
+
+    // k1 in [ , ]  splited by k2 -> (, k2] [k2, )
+    // k3 in [k2, ) splited by k4 -> [k2, k4) [k4, )
+    for i in 0..count {
+        let k = format!("k{:0>4}", 2 * i + 1);
+        let region = cluster.raw.get_region(k.as_bytes());
+        let sp = format!("k{:0>4}", 2 * i + 2);
+        unsafe {
+            tikv_util::debug!("!!!! split before {:?} {:?} {} {}", std::str::from_utf8_unchecked(region.get_start_key()),
+            std::str::from_utf8_unchecked(region.get_end_key()), k, sp);
+        }
+        cluster.raw.must_split(&region, sp.as_bytes());
+        let region = cluster.raw.get_region(k.as_bytes());
+        unsafe {
+            tikv_util::debug!("!!!! split after {:?} {:?} {} {}", std::str::from_utf8_unchecked(region.get_start_key()),
+            std::str::from_utf8_unchecked(region.get_end_key()), k, sp);
+        }
+    }
+
+    (cluster, pd_client)
+}
+
+
 #[test]
-fn test_concurrent_snapshot2() {
+fn test_many_concurrent_snapshot() {
+    let c = 4;
+    let (cluster, pd_client) = new_split_region_cluster(c);
+
+    for i in 0..c {
+        let k = format!("k{:0>4}", 2 * i + 1);
+        let region_id = cluster.raw.get_region(k.as_bytes()).get_id();
+        pd_client.must_add_peer(region_id, new_peer(2, 2));
+    }
+
+    for i in 0..c {
+        let k = format!("k{:0>4}", 2 * i + 1);
+        let v = format!("v{}", 2 * i + 1);
+        check_key(&cluster, k.as_bytes(), v.as_bytes(), Some(true), Some(true), Some(vec![2]));
+    }
+}
+
+#[test]
+fn test_basic_concurrent_snapshot() {
     let (mut cluster, pd_client) = new_mock_cluster(0, 3);
 
     // Disable raft log gc in this test case.
