@@ -148,14 +148,26 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
         )
     }
 
+    pub fn create_engines(&mut self) {
+        self.raw.io_rate_limiter = Some(Arc::new(
+            self.raw.cfg
+                .storage
+                .io_rate_limit
+                .build(true /*enable_statistics*/),
+        ));
+        for _ in 0..self.raw.count {
+            self.create_engine(None);
+        }
+    }
+
     pub fn run(&mut self) {
-        self.raw.create_engines();
+        self.create_engines();
         self.raw.bootstrap_region().unwrap();
         self.start().unwrap();
     }
 
     pub fn run_conf_change(&mut self) -> u64 {
-        self.raw.create_engines();
+        self.create_engines();
         let region_id = self.raw.bootstrap_conf_change();
         // Will not start new nodes in `start`
         self.start().unwrap();
@@ -175,7 +187,7 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
         let (mut ffi_helper_set, mut node_cfg) =
             self.make_ffi_helper_set(0, engines.clone(), &key_manager, &router);
 
-        engines.kv.engine_store_server_helper = ffi_helper_set
+        let helper_sz = ffi_helper_set
             .proxy
             .kv_engine
             .write()
@@ -184,12 +196,15 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
             .unwrap()
             .engine_store_server_helper;
 
-        let helper = engine_store_ffi::gen_engine_store_server_helper(engines.kv.engine_store_server_helper);
+        let helper = engine_store_ffi::gen_engine_store_server_helper(helper_sz);
         let ffi_hub = Arc::new(engine_store_ffi::observer::TiFlashFFIHub {
             engine_store_server_helper: helper,
         });
+
+        debug!("!!!!!! init engines");
+        engines.kv.init(helper_sz, 2, Some(ffi_hub));
+
         assert_ne!(engines.kv.engine_store_server_helper, 0);
-        engines.kv.ffi_hub = Some(ffi_hub);
 
         // replace self.raw.create_engine
         self.raw.dbs.push(engines.clone());
@@ -372,7 +387,7 @@ pub fn create_tiflash_test_engine(
     );
 
     let mut engine = engine_tiflash::RocksEngine::from_db(engine);
-    engine.init(0, 2, None);
+    // FFI is not usable, until create_engine.
     let mut raft_engine = engine_rocks::RocksEngine::from_db(raft_engine);
     let shared_block_cache = cache.is_some();
     engine.set_shared_block_cache(shared_block_cache);
