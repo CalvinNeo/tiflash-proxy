@@ -145,24 +145,26 @@ fn test_write_batch() {
 }
 
 pub fn must_get_mem(engine_store_server: &Box<mock_engine_store::EngineStoreServer>, region_id: u64, key: &[u8], value: Option<&[u8]>) {
+    let mut last_res: Option<&Vec<u8>> = None;
     for _ in 1..300 {
         let res = engine_store_server
             .get_mem(region_id, mock_engine_store::ffi_interfaces::ColumnFamilyType::Default, &key.to_vec());
 
-        if let (Some(value), Some(res)) = (value, res) {
-            assert_eq!(value, &res[..]);
+        if let (Some(value), Some(last_res)) = (value, res) {
+            assert_eq!(value, &last_res[..]);
             return;
         }
-        if value.is_none() && res.is_none() {
+        if value.is_none() && last_res.is_none() {
             return;
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     panic!(
-        "can't get mem value {:?} for key {} in {}",
+        "can't get mem value {:?} for key {} in {}, actual {:?}",
         value.map(tikv_util::escape),
         log_wrappers::hex_encode_upper(key),
         engine_store_server.id,
+        last_res,
     )
 }
 
@@ -827,19 +829,91 @@ fn test_concurrent_snapshot2() {
     cluster.raw.must_split(&region1, b"k2");
     let r1 = cluster.raw.get_region(b"k1").get_id();
     let r3 = cluster.raw.get_region(b"k3").get_id();
-    // cluster.raw.must_transfer_leader(r1, new_peer(1, 1));
-    // cluster.raw.must_transfer_leader(r3, new_peer(1, 1));
 
     fail::cfg("before_actually_pre_handle", "sleep(1000)");
     tikv_util::info!("region k1 {} k3 {}", r1, r3);
     pd_client.add_peer(r1, new_peer(2, 2));
     pd_client.add_peer(r3, new_peer(2, 2));
     std::thread::sleep(std::time::Duration::from_millis(500));
+    // Now, k1 and k3 are not handled, since pre-handle process is not finished.
 
     let pending_count = cluster.raw.engines.get(&2).unwrap().kv.pending_applies_count.clone();
     assert_eq!(pending_count.load(Ordering::Relaxed), 2);
     std::thread::sleep(std::time::Duration::from_millis(1000));
+    // Now, k1 and k3 are handled.
     assert_eq!(pending_count.load(Ordering::Relaxed), 0);
+
+    cluster.raw.shutdown();
+}
+
+#[test]
+fn test_prehandle_fail() {
+    let pd_client = Arc::new(TestPdClient::new(0, false));
+    let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
+    let mut cluster = mock_engine_store::mock_cluster::Cluster::new(0, 3, sim, pd_client.clone());
+
+    // Disable raft log gc in this test case.
+    cluster.raw.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
+
+    // Disable default max peer count check.
+    pd_client.disable_default_operator();
+    let r1 = cluster.run_conf_change();
+    cluster.raw.must_put(b"k1", b"v1");
+
+    let eng_ids = cluster.raw.engines.iter().map(|e| e.0.to_owned()).collect::<Vec<_>>();
+    fail::cfg("before_actually_pre_handle", "return");
+    pd_client.add_peer(r1, new_peer(eng_ids[1], eng_ids[1]));
+    check_key(&cluster, b"k1", b"v1", Some(true), Some(true), Some(vec![eng_ids[1]]));
+    fail::remove("before_actually_pre_handle");
+
+    cluster.raw.shutdown();
+}
+
+
+#[test]
+fn test_handle_destroy() {
+    let pd_client = Arc::new(TestPdClient::new(0, false));
+    let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
+    let mut cluster = mock_engine_store::mock_cluster::Cluster::new(0, 3, sim, pd_client.clone());
+
+    // Disable raft log gc in this test case.
+    cluster.raw.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
+
+    // Disable default max peer count check.
+    pd_client.disable_default_operator();
+
+    cluster.run();
+    cluster.raw.must_put(b"k1", b"v1");
+    let eng_ids = cluster.raw.engines.iter().map(|e| e.0.to_owned()).collect::<Vec<_>>();
+
+
+    let region = cluster.raw.get_region(b"k1");
+    let region_id = region.get_id();
+    let peer_1 = find_peer(&region, eng_ids[0]).cloned().unwrap();
+    let peer_2 = find_peer(&region, eng_ids[1]).cloned().unwrap();
+    cluster.raw.must_transfer_leader(region_id, peer_1);
+
+    {
+        let mut lock = cluster
+            .ffi_helper_set.lock().unwrap();
+        let server = &lock.get_mut().get(&eng_ids[1]).unwrap()
+            .engine_store_server;
+
+        assert!(server.kvstore.contains_key(&region_id));
+    }
+
+    pd_client.must_remove_peer(region_id, peer_2);
+
+    check_key(&cluster, b"k1", b"k2", Some(false), None, Some(vec![eng_ids[1]]));
+
+    {
+        let mut lock = cluster
+            .ffi_helper_set.lock().unwrap();
+        let server = &lock.get_mut().get(&eng_ids[1]).unwrap()
+            .engine_store_server;
+
+        assert!(!server.kvstore.contains_key(&region_id));
+    }
 
     cluster.raw.shutdown();
 }
