@@ -437,32 +437,49 @@ impl AdminObserver for TiFlashObserver {
     }
 }
 
+fn retrieve_sst_files(snap: &raftstore::store::Snapshot) -> Vec<(PathBuf, ColumnFamilyType)> {
+    let mut ssts: Vec<(PathBuf, ColumnFamilyType)> = vec![];
+    for cf_file in &snap.cf_files {
+        // cf_file will be changed by dynamic region.
+        if cf_file.size == 0 {
+            // Skip empty cf file.
+            continue;
+        }
+
+        // if plain_file_used(cf_file.cf) {
+        //     assert!(cf_file.cf == CF_LOCK);
+        // }
+
+        ssts.push((cf_file.path.clone(), crate::name_to_cf(cf_file.cf)));
+    }
+    ssts
+}
+
 fn pre_handle_snapshot_impl(engine_store_server_helper: &'static crate::EngineStoreServerHelper,
-                            region: &Region, snap_key: &SnapKey, task: Arc<PrehandleTask>) -> Option<PtrWrapper> {
+                            peer_id: u64, ssts: Vec<(PathBuf, ColumnFamilyType)>,
+                            region: &Region, snap_key: &SnapKey) -> PtrWrapper {
+
     let idx = snap_key.idx;
     let term = snap_key.term;
     let ptr = {
-        // let lock = task.lock().unwrap();
-        let sst_views = task.ssts
+        let sst_views = ssts
             .iter()
             .map(|(b, c)| (b.to_str().unwrap().as_bytes(), c.clone()))
             .collect();
-        fail::fail_point!("before_ffi_pre_handle", |_| { return None; });
-        engine_store_server_helper.pre_handle_snapshot(region, task.peer_id, sst_views, idx, term)
+        engine_store_server_helper.pre_handle_snapshot(region, peer_id, sst_views, idx, term)
     };
-    Some(PtrWrapper(ptr))
+    PtrWrapper(ptr)
 }
 
 #[derive(Debug)]
 pub struct PrehandleTask {
-    pub recv: mpsc::Receiver<Option<PtrWrapper>>,
-    pub ssts: Vec<(PathBuf, ColumnFamilyType)>,
+    pub recv: mpsc::Receiver<PtrWrapper>,
     pub peer_id: u64,
 }
 
 impl PrehandleTask {
-    fn new(recv: mpsc::Receiver<Option<PtrWrapper>>, ssts: Vec<(PathBuf, ColumnFamilyType)>, peer_id: u64) -> Self {
-        PrehandleTask { recv, ssts, peer_id }
+    fn new(recv: mpsc::Receiver<PtrWrapper>, peer_id: u64) -> Self {
+        PrehandleTask { recv, peer_id }
     }
 }
 
@@ -472,27 +489,13 @@ impl ApplySnapshotObserver for TiFlashObserver {
         ob_ctx: &mut ObserverContext<'_>,
         peer_id: u64,
         snap_key: &SnapKey,
-        cf_files: &[raftstore::store::snap::CfFile],
+        snap: &raftstore::store::Snapshot,
     ) {
         info!("prehandle snapshot peer_id {}", peer_id);
         fail::fail_point!("on_ob_pre_handle_snapshot", |_| {});
-        let mut ssts = vec![];
-        for cf_file in cf_files {
-            // cf_file will be changed by dynamic region.
-            if cf_file.size == 0 {
-                // Skip empty cf file.
-                continue;
-            }
-
-            // if plain_file_used(cf_file.cf) {
-            //     assert!(cf_file.cf == CF_LOCK);
-            // }
-
-            ssts.push((cf_file.path.clone(), crate::name_to_cf(cf_file.cf)));
-        }
 
         let (sender, receiver) = mpsc::channel();
-        let task = Arc::new(PrehandleTask::new(receiver, ssts, peer_id));
+        let task = Arc::new(PrehandleTask::new(receiver, peer_id));
         {
             let lock = self.pre_handle_snapshot_ctx
                 .lock()
@@ -505,12 +508,14 @@ impl ApplySnapshotObserver for TiFlashObserver {
         let engine_store_server_helper = self.engine_store_server_helper;
         let region = ob_ctx.region().clone();
         let snap_key = snap_key.clone();
+        let ssts = retrieve_sst_files(snap);
         self.engine.pending_applies_count.fetch_add(1, Ordering::Relaxed);
         self.engine.apply_snap_pool.as_ref().unwrap().spawn(async move {
             // The original implementation is in `Snapshot`, so we don't need to care abort lifetime.
-            fail::fail_point!("before_actually_pre_handle", |_| { sender.send(None); return; });
+            fail::fail_point!("before_actually_pre_handle", |_| { });
             let res = pre_handle_snapshot_impl(engine_store_server_helper,
-                                               &region, &snap_key, task.clone());
+                                                        task.peer_id, ssts,
+                                                        &region, &snap_key);
             sender.send(res);
         });
     }
@@ -518,7 +523,9 @@ impl ApplySnapshotObserver for TiFlashObserver {
     fn post_apply_snapshot(
         &self,
         ob_ctx: &mut ObserverContext<'_>,
+        peer_id: u64,
         snap_key: &raftstore::store::SnapKey,
+        snap: &raftstore::store::Snapshot,
     ) {
         fail::fail_point!("on_ob_post_apply_snapshot", |_| {});
         let maybe_snapshot = {
@@ -526,19 +533,13 @@ impl ApplySnapshotObserver for TiFlashObserver {
             let mut ctx = lock.borrow_mut();
             ctx.tracer.remove(snap_key)
         };
-        match maybe_snapshot {
+        let need_retry = match maybe_snapshot {
             Some(t) => {
-                let need_retry = match t.recv.recv() {
-                    Ok(snap_ptr) => match snap_ptr {
-                        Some(s) => {
-                            debug!("get prehandled snapshot success");
-                            self.engine_store_server_helper
-                                .apply_pre_handled_snapshot(s.0);
-                            false
-                        }
-                        None => {
-                            true
-                        },
+                 let neer_retry = match t.recv.recv() {
+                    Ok(snap_ptr) => {
+                        debug!("get prehandled snapshot success");
+                        self.engine_store_server_helper.apply_pre_handled_snapshot(snap_ptr.0);
+                        false
                     },
                     Err(_) => {
                         debug!("background pre-handle snapshot get error";
@@ -549,28 +550,26 @@ impl ApplySnapshotObserver for TiFlashObserver {
                     },
                 };
                 self.engine.pending_applies_count.fetch_sub(1, Ordering::Relaxed);
-                if need_retry {
-                    match pre_handle_snapshot_impl(self.engine_store_server_helper, ob_ctx.region(), snap_key, t) {
-                        Some(s) => {
-                            debug!("re-gen prehandled snapshot success";
-                                "snap_key" => ?snap_key,
-                                "region" => ?ob_ctx.region(),
-                            );
-                            self.engine_store_server_helper
-                                .apply_pre_handled_snapshot(s.0);
-                            false
-                        },
-                        None => {
-                            debug!("re-gen prehandled fail");
-                            panic!("re-gen prehandled fail");
-                        },
-                    };
-                }
+                neer_retry
             }
             None => {
-                panic!("can not get snapshot of {:?} for region {:?}", snap_key, ob_ctx.region());
+                // We can't find background pre-handle task,
+                // maybe we can't get snapshot at that time.
+                true
             }
         };
+        if need_retry {
+            let ssts = retrieve_sst_files(snap);
+            let ptr = pre_handle_snapshot_impl(self.engine_store_server_helper,
+                                               peer_id, ssts,
+                                               ob_ctx.region(), snap_key);
+            debug!("re-gen pre-handled snapshot success";
+                "snap_key" => ?snap_key,
+                "region" => ?ob_ctx.region(),
+            );
+            self.engine_store_server_helper
+                .apply_pre_handled_snapshot(ptr.0);
+        }
     }
 }
 

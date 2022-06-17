@@ -862,9 +862,16 @@ fn test_prehandle_fail() {
 
     let eng_ids = cluster.raw.engines.iter().map(|e| e.0.to_owned()).collect::<Vec<_>>();
     fail::cfg("before_actually_pre_handle", "return");
-    pd_client.add_peer(r1, new_peer(eng_ids[1], eng_ids[1]));
+    pd_client.must_add_peer(r1, new_peer(eng_ids[1], eng_ids[1]));
     check_key(&cluster, b"k1", b"v1", Some(true), Some(true), Some(vec![eng_ids[1]]));
     fail::remove("before_actually_pre_handle");
+
+    // We can apply snapshot, even if per_handle_snapshot is not called.
+    fail::cfg("on_ob_pre_handle_snapshot", "return");
+    check_key(&cluster, b"k1", b"v1", Some(false), Some(false), Some(vec![eng_ids[2]]));
+    pd_client.must_add_peer(r1, new_peer(eng_ids[2], eng_ids[2]));
+    check_key(&cluster, b"k1", b"v1", Some(true), Some(true), Some(vec![eng_ids[2]]));
+    fail::remove("on_ob_pre_handle_snapshot");
 
     cluster.raw.shutdown();
 }

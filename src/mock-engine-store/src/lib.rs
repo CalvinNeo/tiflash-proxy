@@ -382,7 +382,10 @@ impl EngineStoreServerWrap {
     }
 
     unsafe fn write_to_db_data(store: &mut EngineStoreServer, region: &mut Box<Region>) {
-        info!("mock flush to engine");
+        info!("mock flush to engine";
+            "region" => ?region.region,
+            "store_id" => store.id,
+        );
         let kv = &mut store.engines.as_mut().unwrap().kv;
         for cf in 0..3 {
             let pending_write = std::mem::take(region.pending_write.as_mut().get_mut(cf).unwrap());
