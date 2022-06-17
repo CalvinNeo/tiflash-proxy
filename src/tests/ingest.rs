@@ -55,9 +55,7 @@ pub fn create_tmp_importer(cfg: &Config, kv_path: &str) -> (PathBuf, Arc<SSTImpo
 
 #[test]
 fn test_handle_ingest_sst() {
-    let pd_client = Arc::new(TestPdClient::new(0, false));
-    let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
-    let mut cluster = mock_engine_store::mock_cluster::Cluster::new(0, 1, sim, pd_client.clone());
+    let (mut cluster, pd_client) = crate::normal::new_mock_cluster(0, 1);
 
     cluster.run();
 

@@ -498,15 +498,3 @@ impl Simulator<engine_tiflash::RocksEngine> for NodeCluster {
         self.nodes.get(&node_id).map(|node| node.get_router())
     }
 }
-
-pub fn new_node_cluster(id: u64, count: usize) -> Cluster<NodeCluster> {
-    let pd_client = Arc::new(TestPdClient::new(id, false));
-    let sim = Arc::new(RwLock::new(NodeCluster::new(Arc::clone(&pd_client))));
-    Cluster::new(id, count, sim, pd_client)
-}
-
-pub fn new_incompatible_node_cluster(id: u64, count: usize) -> Cluster<NodeCluster> {
-    let pd_client = Arc::new(TestPdClient::new(id, true));
-    let sim = Arc::new(RwLock::new(NodeCluster::new(Arc::clone(&pd_client))));
-    Cluster::new(id, count, sim, pd_client)
-}

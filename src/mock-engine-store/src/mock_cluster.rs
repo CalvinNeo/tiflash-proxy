@@ -34,6 +34,7 @@ use file_system::IORateLimiter;
 use std::borrow::BorrowMut;
 use std::cell::RefCell;
 use tempfile::TempDir;
+use engine_store_ffi::config::ProxyConfig;
 
 // mock cluster
 
@@ -54,6 +55,7 @@ pub struct EngineHelperSet {
 pub struct Cluster<T: Simulator<engine_tiflash::RocksEngine>> {
     pub raw: test_raftstore::Cluster<T, engine_tiflash::RocksEngine>,
     pub ffi_helper_set: Arc<Mutex<RefCell<HashMap<u64, FFIHelperSet>>>>,
+    pub proxy_cfg: ProxyConfig,
 }
 
 impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
@@ -62,6 +64,7 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
         count: usize,
         sim: Arc<RwLock<T>>,
         pd_client: Arc<TestPdClient>,
+        proxy_cfg: ProxyConfig,
     ) -> Cluster<T> {
         // Force sync to enable Leader run as a Leader, rather than proxy
         test_util::init_log_for_test();
@@ -78,6 +81,7 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
         Cluster {
             raw: cls,
             ffi_helper_set: Arc::new(Mutex::new(RefCell::new(HashMap::default()))),
+            proxy_cfg,
         }
     }
 

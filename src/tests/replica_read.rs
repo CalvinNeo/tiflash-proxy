@@ -151,9 +151,7 @@ extern "C" fn ffi_wake(data: RawVoidPtr) {
 
 #[test]
 fn test_read_index() {
-    let pd_client = Arc::new(TestPdClient::new(0, false));
-    let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
-    let mut cluster = mock_engine_store::mock_cluster::Cluster::new(0, 3, sim, pd_client.clone());
+    let (mut cluster, pd_client) = crate::normal::new_mock_cluster(0, 3);
 
     test_raftstore::configure_for_lease_read(&mut cluster.raw, Some(50), Some(10_000));
     cluster.raw.cfg.raft_store.raft_heartbeat_ticks = 1;

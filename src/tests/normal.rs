@@ -10,7 +10,7 @@ use test_raftstore::{must_get_equal, must_get_none, new_peer, TestPdClient};
 extern crate rocksdb;
 use crate::normal::rocksdb::Writable;
 use ::rocksdb::DB;
-use engine_store_ffi::config::ensure_no_common_unrecognized_keys;
+use engine_store_ffi::config::{ensure_no_common_unrecognized_keys, ProxyConfig};
 use engine_tiflash::*;
 use engine_traits::{Iterable, WriteBatchExt, Mutable, WriteBatch};
 use engine_traits::Iterator;
@@ -81,9 +81,7 @@ fn test_config() {
 
 #[test]
 fn test_store_setup() {
-    let pd_client = Arc::new(TestPdClient::new(0, false));
-    let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
-    let mut cluster = mock_engine_store::mock_cluster::Cluster::new(0, 3, sim, pd_client.clone());
+    let (mut cluster, pd_client) = new_mock_cluster(0, 3);
 
     // Add label to cluster
     engine_store_ffi::config::address_proxy_config(&mut cluster.raw.cfg.tikv);
@@ -104,9 +102,7 @@ fn test_store_setup() {
 
 #[test]
 fn test_store_stats() {
-    let pd_client = Arc::new(TestPdClient::new(0, false));
-    let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
-    let mut cluster = mock_engine_store::mock_cluster::Cluster::new(0, 1, sim, pd_client.clone());
+    let (mut cluster, pd_client) = new_mock_cluster(0, 1);
 
     let _ = cluster.run();
 
@@ -120,9 +116,7 @@ fn test_store_stats() {
 
 #[test]
 fn test_write_batch() {
-    let pd_client = Arc::new(TestPdClient::new(0, false));
-    let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
-    let mut cluster = mock_engine_store::mock_cluster::Cluster::new(0, 1, sim, pd_client);
+    let (mut cluster, pd_client) = new_mock_cluster(0, 1);
 
     let _ = cluster.run();
 
@@ -212,9 +206,12 @@ pub fn check_key(cluster: &mock_engine_store::mock_cluster::Cluster<NodeCluster>
 
 #[test]
 fn test_leadership_change() {
-    let pd_client = Arc::new(TestPdClient::new(0, false));
-    let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
-    let mut cluster = mock_engine_store::mock_cluster::Cluster::new(0, 3, sim, pd_client);
+    let (mut cluster, pd_client) = new_mock_cluster(0, 3);
+
+    // Disable compact log, otherwise is may advance and persist apply state after leadership change.
+    cluster.raw.cfg.raft_store.raft_log_gc_count_limit = 1000;
+    cluster.raw.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10);
+    cluster.raw.cfg.raft_store.snap_apply_batch_size = ReadableSize(500);
 
     let _ = cluster.run();
 
@@ -305,11 +302,17 @@ fn collect_all_states(cluster: &mock_engine_store::mock_cluster::Cluster<NodeClu
     prev_state
 }
 
-#[test]
-fn test_kv_write() {
+pub fn new_mock_cluster(id: u64, count: usize) -> (mock_engine_store::mock_cluster::Cluster<NodeCluster>, Arc<TestPdClient>) {
     let pd_client = Arc::new(TestPdClient::new(0, false));
     let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
-    let mut cluster = mock_engine_store::mock_cluster::Cluster::new(0, 3, sim, pd_client);
+    let cluster = mock_engine_store::mock_cluster::Cluster::new(id, count, sim, pd_client.clone(), ProxyConfig::default());
+
+    (cluster, pd_client)
+}
+
+#[test]
+fn test_kv_write() {
+    let (mut cluster, pd_client) = new_mock_cluster(0, 3);
 
     fail::cfg("on_address_apply_result_normal", "return(false)").unwrap();
     fail::cfg("on_address_apply_result_admin", "return(false)").unwrap();
@@ -434,9 +437,7 @@ pub fn new_verify_hash_request(hash: Vec<u8>, index: u64) -> AdminRequest {
 
 #[test]
 fn test_consistency_check() {
-    let pd_client = Arc::new(TestPdClient::new(0, false));
-    let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
-    let mut cluster = mock_engine_store::mock_cluster::Cluster::new(0, 2, sim, pd_client.clone());
+    let (mut cluster, pd_client) = new_mock_cluster(0, 2);
 
     cluster.run();
 
@@ -464,10 +465,7 @@ fn test_consistency_check() {
 
 #[test]
 fn test_compact_log() {
-    let pd_client = Arc::new(TestPdClient::new(0, false));
-    let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
-    let mut cluster = mock_engine_store::mock_cluster::Cluster::new(0, 3, sim, pd_client.clone());
-
+    let (mut cluster, pd_client) = new_mock_cluster(0, 3);
     cluster.run();
 
     cluster.raw.must_put(b"k", b"v");
@@ -535,9 +533,7 @@ fn test_compact_log() {
 
 #[test]
 fn test_split_merge() {
-    let pd_client = Arc::new(TestPdClient::new(0, false));
-    let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
-    let mut cluster = mock_engine_store::mock_cluster::Cluster::new(0, 3, sim, pd_client.clone());
+    let (mut cluster, pd_client) = new_mock_cluster(0, 3);
 
     // can always apply snapshot immediately
     fail::cfg("on_can_apply_snapshot", "return(true)");
@@ -624,9 +620,7 @@ fn test_split_merge() {
 
 #[test]
 fn test_get_region_local_state() {
-    let pd_client = Arc::new(TestPdClient::new(0, false));
-    let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
-    let mut cluster = mock_engine_store::mock_cluster::Cluster::new(0, 3, sim, pd_client);
+    let (mut cluster, pd_client) = new_mock_cluster(0, 3);
 
     cluster.start();
 
@@ -706,9 +700,7 @@ fn test_get_region_local_state() {
 
 #[test]
 fn test_huge_snapshot() {
-    let pd_client = Arc::new(TestPdClient::new(0, false));
-    let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
-    let mut cluster = mock_engine_store::mock_cluster::Cluster::new(0, 3, sim, pd_client.clone());
+    let (mut cluster, pd_client) = new_mock_cluster(0, 3);
 
     fail::cfg("on_can_apply_snapshot", "return(true)");
     cluster.raw.cfg.raft_store.raft_log_gc_count_limit = 1000;
@@ -763,9 +755,7 @@ fn test_huge_snapshot() {
 
 #[test]
 fn test_concurrent_snapshot() {
-    let pd_client = Arc::new(TestPdClient::new(0, false));
-    let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
-    let mut cluster = mock_engine_store::mock_cluster::Cluster::new(0, 3, sim, pd_client.clone());
+    let (mut cluster, pd_client) = new_mock_cluster(0, 3);
 
     // Disable raft log gc in this test case.
     cluster.raw.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
@@ -813,9 +803,7 @@ fn test_concurrent_snapshot() {
 
 #[test]
 fn test_concurrent_snapshot2() {
-    let pd_client = Arc::new(TestPdClient::new(0, false));
-    let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
-    let mut cluster = mock_engine_store::mock_cluster::Cluster::new(0, 3, sim, pd_client.clone());
+    let (mut cluster, pd_client) = new_mock_cluster(0, 3);
 
     // Disable raft log gc in this test case.
     cluster.raw.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
@@ -850,9 +838,7 @@ fn test_concurrent_snapshot2() {
 
 #[test]
 fn test_prehandle_fail() {
-    let pd_client = Arc::new(TestPdClient::new(0, false));
-    let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
-    let mut cluster = mock_engine_store::mock_cluster::Cluster::new(0, 3, sim, pd_client.clone());
+    let (mut cluster, pd_client) = new_mock_cluster(0, 3);
 
     // Disable raft log gc in this test case.
     cluster.raw.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
@@ -881,9 +867,7 @@ fn test_prehandle_fail() {
 
 #[test]
 fn test_handle_destroy() {
-    let pd_client = Arc::new(TestPdClient::new(0, false));
-    let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
-    let mut cluster = mock_engine_store::mock_cluster::Cluster::new(0, 3, sim, pd_client.clone());
+    let (mut cluster, pd_client) = new_mock_cluster(0, 3);
 
     // Disable raft log gc in this test case.
     cluster.raw.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
