@@ -204,6 +204,91 @@ pub fn check_key(cluster: &mock_engine_store::mock_cluster::Cluster<NodeCluster>
     }
 }
 
+fn must_assert_state(cluster: &mock_engine_store::mock_cluster::Cluster<NodeCluster>,
+                     region_id: u64, prev_state: HashMap<u64, States>) {
+
+}
+
+#[test]
+fn test_interaction() {
+    // TODO Maybe we should pick this test to TiKV.
+
+    let (mut cluster, pd_client) = new_mock_cluster(0, 3);
+
+    fail::cfg("can_flush_data", "return(0)").unwrap();
+    let _ = cluster.run();
+
+    cluster.raw.must_put(b"k1", b"v1");
+    let region = cluster.raw.get_region(b"k1");
+    let region_id = region.get_id();
+
+    // Wait until all nodes have (k1, v1).
+    check_key(&cluster, b"k1", b"v1", Some(true), None, None);
+
+    let prev_states = collect_all_states(&cluster, region_id);
+    let compact_log = test_raftstore::new_compact_log_request(100, 10);
+    let req = test_raftstore::new_admin_request(region_id, region.get_region_epoch(), compact_log);
+    let res = cluster
+        .raw
+        .call_command_on_leader(req.clone(), Duration::from_secs(3))
+        .unwrap();
+
+    // Will be considered as a empty cmd
+    let mut retry = 0;
+    let new_states = loop {
+        let new_states = collect_all_states(&cluster, region_id);
+        let mut ok = true;
+        for i in prev_states.keys() {
+            let old = prev_states.get(i).unwrap();
+            let new = new_states.get(i).unwrap();
+            if old.in_memory_apply_state == new.in_memory_apply_state
+                && old.in_memory_applied_term == new.in_memory_applied_term {
+                ok = false;
+                break;
+            }
+        }
+        if ok {
+            break new_states;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        retry += 1;
+    };
+
+    for i in prev_states.keys() {
+        let old = prev_states.get(i).unwrap();
+        let new = new_states.get(i).unwrap();
+        assert_ne!(old.in_memory_apply_state, new.in_memory_apply_state);
+        assert_eq!(old.in_memory_applied_term, new.in_memory_applied_term);
+        // An empty cmd will not cause persistence.
+        assert_eq!(old.in_disk_apply_state, new.in_disk_apply_state);
+    }
+
+    cluster.raw.must_put(b"k2", b"v2");
+    // Wait until all nodes have (k2, v2).
+    check_key(&cluster, b"k2", b"v2", Some(true), None, None);
+
+    fail::cfg("on_empty_cmd_normal", "return").unwrap();
+    let prev_states = collect_all_states(&cluster, region_id);
+    let res = cluster
+        .raw
+        .call_command_on_leader(req, Duration::from_secs(3))
+        .unwrap();
+
+    // post_exec will not filter empty cmds.
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    let new_states = collect_all_states(&cluster, region_id);
+    for i in prev_states.keys() {
+        let old = prev_states.get(i).unwrap();
+        let new = new_states.get(i).unwrap();
+        assert_ne!(old.in_memory_apply_state, new.in_memory_apply_state);
+        assert_eq!(old.in_memory_applied_term, new.in_memory_applied_term);
+    }
+
+    fail::remove("can_flush_data");
+    fail::remove("on_empty_cmd_normal");
+    cluster.raw.shutdown();
+}
+
 #[test]
 fn test_leadership_change_filter() {
     test_leadership_change_impl(true);
@@ -226,7 +311,7 @@ fn test_leadership_change_impl(filter: bool) {
         // We don't handle CompactLog at all.
         fail::cfg("can_flush_data", "return(0)").unwrap();
     } else {
-        // We don't return Persist after handling CompactLog
+        // We don't return Persist after handling CompactLog.
         fail::cfg("on_handle_admin_raft_cmd_no_persist", "return").unwrap();
     }
     fail::cfg("on_empty_cmd_normal", "return");
@@ -247,6 +332,10 @@ fn test_leadership_change_impl(filter: bool) {
 
     // Wait until all nodes have (k2, v2), then transfer leader.
     check_key(&cluster, b"k2", b"v2", Some(true), None, None);
+    if filter {
+        // We should also filter normal kv, since CompactLog may be filtered as empty cmd.
+        fail::cfg("on_post_exec_normal", "return(false)").unwrap();
+    }
     let prev_states = collect_all_states(&cluster, region_id);
     cluster.raw.must_transfer_leader(region.get_id(), peer_2.clone());
 
@@ -276,6 +365,7 @@ fn test_leadership_change_impl(filter: bool) {
 
     if filter {
         fail::remove("can_flush_data");
+        fail::remove("on_post_exec_normal");
     } else {
         fail::remove("on_handle_admin_raft_cmd_no_persist");
     }
@@ -500,6 +590,8 @@ fn test_compact_log() {
     let region = cluster.raw.get_region("k".as_bytes());
     let region_id = region.get_id();
 
+    // Don't handle CompactLog, and corresponding empty cmd.
+    fail::cfg("on_empty_cmd_normal", "return");
     fail::cfg("can_flush_data", "return(0)");
     for i in 0..10 {
         let k = format!("k{}", i);
@@ -507,53 +599,52 @@ fn test_compact_log() {
         cluster.raw.must_put(k.as_bytes(), v.as_bytes());
     }
 
-    let mut hmap: HashMap<u64, RaftApplyState> = Default::default();
-    for id in cluster.raw.engines.keys() {
-        let mut lock = cluster
-            .ffi_helper_set.lock().unwrap();
-        let server = &lock.get_mut().get(id).unwrap()
-            .engine_store_server;
-        let apply_state = get_apply_state(&server.engines.as_ref().unwrap().kv.rocks, region_id);
-        hmap.insert(*id, apply_state);
-    }
+    let prev_state = collect_all_states(&cluster, region_id);
 
-    let compact_log = test_raftstore::new_compact_log_request(100, 10);
+    let (compact_index, compact_term) = prev_state.iter()
+        .map(|(_, s)| (s.in_memory_apply_state.get_applied_index(), s.in_memory_applied_term))
+        .min_by(|l, r| l.0.cmp(&r.0)).unwrap();
+    let compact_log = test_raftstore::new_compact_log_request(compact_index, compact_term);
     let req = test_raftstore::new_admin_request(region_id, region.get_region_epoch(), compact_log);
     let res = cluster
         .raw
         .call_command_on_leader(req, Duration::from_secs(3))
         .unwrap();
+    // compact index should less than applied index
+    assert!(!res.get_header().has_error(), "{:?}", res);
 
     // compact log is filtered
-    for id in cluster.raw.engines.keys() {
-        let mut lock = cluster
-            .ffi_helper_set.lock().unwrap();
-        let server = &lock.get_mut().get(id).unwrap()
-            .engine_store_server;
-        let apply_state = get_apply_state(&server.engines.as_ref().unwrap().kv.rocks, region_id);
-        assert_eq!(apply_state.get_truncated_state(), hmap.get(id).unwrap().get_truncated_state());
+    let new_state = collect_all_states(&cluster, region_id);
+    for i in prev_state.keys() {
+        let old = prev_state.get(i).unwrap();
+        let new = new_state.get(i).unwrap();
+        assert_eq!(old.in_memory_apply_state.get_truncated_state(), new.in_memory_apply_state.get_truncated_state());
+        assert_eq!(old.in_disk_apply_state.get_truncated_state(), new.in_disk_apply_state.get_truncated_state());
     }
 
+    fail::remove("on_empty_cmd_normal");
     fail::remove("can_flush_data");
-    let compact_log = test_raftstore::new_compact_log_request(100, 10);
+
+    let (compact_index, compact_term) = new_state.iter()
+        .map(|(_, s)| (s.in_memory_apply_state.get_applied_index(), s.in_memory_applied_term))
+        .min_by(|l, r| l.0.cmp(&r.0)).unwrap();
+    let compact_log = test_raftstore::new_compact_log_request(compact_index, compact_term);
     let req = test_raftstore::new_admin_request(region_id, region.get_region_epoch(), compact_log);
     let res = cluster
         .raw
         .call_command_on_leader(req, Duration::from_secs(3))
         .unwrap();
-    assert!(res.get_header().has_error(), "{:?}", res);
+    assert!(!res.get_header().has_error(), "{:?}", res);
 
     cluster.raw.must_put(b"kz", b"vz");
     check_key(&cluster, b"kz", b"vz", Some(true), None, None);
 
     // compact log is not filtered
-    for id in cluster.raw.engines.keys() {
-        let mut lock = cluster
-            .ffi_helper_set.lock().unwrap();
-        let server = &lock.get_mut().get(id).unwrap()
-            .engine_store_server;
-        let apply_state = get_apply_state(&server.engines.as_ref().unwrap().kv.rocks, region_id);
-        assert_ne!(apply_state.get_truncated_state(), hmap.get(id).unwrap().get_truncated_state());
+    let new_state = collect_all_states(&cluster, region_id);
+    for i in prev_state.keys() {
+        let old = prev_state.get(i).unwrap();
+        let new = new_state.get(i).unwrap();
+        assert_ne!(old.in_memory_apply_state.get_truncated_state(), new.in_memory_apply_state.get_truncated_state());
     }
 
     cluster.raw.shutdown();

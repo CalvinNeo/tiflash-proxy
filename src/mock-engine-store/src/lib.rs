@@ -155,7 +155,7 @@ impl EngineStoreServerWrap {
     ) -> ffi_interfaces::EngineStoreApplyRes {
         let region_id = header.region_id;
         let node_id = (*self.engine_store_server).id;
-        info!("handle admin raft cmd"; "request"=>?req, "response"=>?resp, "index"=>header.index, "region_id"=>header.region_id);
+        info!("handle_admin_raft_cmd"; "request"=>?req, "response"=>?resp, "header"=>?header, "region_id"=>header.region_id);
         let do_handle_admin_raft_cmd = move |region: &mut Box<Region>, engine_store_server: &mut EngineStoreServer| {
             if region.apply_state.get_applied_index() >= header.index {
                 return ffi_interfaces::EngineStoreApplyRes::Persist;
@@ -314,6 +314,16 @@ impl EngineStoreServerWrap {
 
                     region.set_applied(header.index, header.term);
                 },
+                AdminCmdType::CompactLog => {
+                    let region = engine_store_server.kvstore.get_mut(&region_id).unwrap();
+                    let state = &mut region.apply_state;
+                    let compact_index = req.get_compact_log().get_compact_index();
+                    let compact_term = req.get_compact_log().get_compact_term();
+                    state.mut_truncated_state().set_index(compact_index);
+                    state.mut_truncated_state().set_term(compact_term);
+
+                    region.set_applied(header.index, header.term);
+                },
                 _ => {
                     region.set_applied(header.index, header.term);
                 },
@@ -429,12 +439,12 @@ impl EngineStoreServerWrap {
                 let cf = &*cmds.cmd_cf.add(i as _);
                 let cf_index = (*cf) as u8;
                 debug!(
-                    "handle_write_raft_cmd add K {:?} V {:?} to region {} node id {} cf {}",
-                    &k[..std::cmp::min(4usize, k.len())],
-                    &v[..std::cmp::min(4usize, v.len())],
-                    region_id,
-                    server.id,
-                    cf_index,
+                    "handle_write_raft_cmd";
+                    "k" => ?&k[..std::cmp::min(4usize, k.len())],
+                    "v" => ?&v[..std::cmp::min(4usize, v.len())],
+                    "region_id" => region_id,
+                    "node_id" => server.id,
+                    "header" => ?header,
                 );
                 match tp {
                     engine_store_ffi::WriteCmdType::Put => {

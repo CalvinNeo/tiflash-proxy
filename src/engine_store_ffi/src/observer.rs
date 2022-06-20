@@ -320,7 +320,10 @@ impl AdminObserver for TiFlashObserver {
         match req.get_cmd_type() {
             AdminCmdType::CompactLog => {
                 if !self.engine_store_server_helper.can_flush_data(ob_ctx.region().get_id(), 1) {
-                    debug!("!!!!! should filter");
+                    debug!("!!!!! should filter";
+                        "region" => ?ob_ctx.region(),
+                        "req" => ?req,
+                    );
                     return true;
                 }
             },
@@ -357,8 +360,7 @@ impl AdminObserver for TiFlashObserver {
         }
 
         match cmd_type {
-            AdminCmdType::CompactLog | AdminCmdType::CommitMerge => {}
-            AdminCmdType::ComputeHash | AdminCmdType::VerifyHash => {
+            AdminCmdType::CompactLog | AdminCmdType::ComputeHash | AdminCmdType::VerifyHash => {
                 info!(
                     "useless admin command";
                     "region_id" => ob_ctx.region().get_id(),
