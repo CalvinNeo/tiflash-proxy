@@ -155,7 +155,7 @@ impl EngineStoreServerWrap {
     ) -> ffi_interfaces::EngineStoreApplyRes {
         let region_id = header.region_id;
         let node_id = (*self.engine_store_server).id;
-        info!("handle admin raft cmd"; "request"=>?req, "response"=>?resp, "index"=>header.index, "region-id"=>header.region_id);
+        info!("handle admin raft cmd"; "request"=>?req, "response"=>?resp, "index"=>header.index, "region_id"=>header.region_id);
         let do_handle_admin_raft_cmd = move |region: &mut Box<Region>, engine_store_server: &mut EngineStoreServer| {
             if region.apply_state.get_applied_index() >= header.index {
                 return ffi_interfaces::EngineStoreApplyRes::Persist;

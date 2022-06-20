@@ -202,14 +202,14 @@ impl QueryObserver for TiFlashObserver {
         );
     }
 
-    fn address_apply_result(
+    fn post_exec_query(
         &self,
         ob_ctx: &mut ObserverContext<'_>,
         cmd: &Cmd,
         apply_state: &RaftApplyState,
         region_state: &RegionState,
     ) -> bool {
-        fail::fail_point!("on_address_apply_result_normal", |e| { e.unwrap().parse::<bool>().unwrap() });
+        fail::fail_point!("on_post_exec_normal", |e| { e.unwrap().parse::<bool>().unwrap() });
         const NONE_STR: &str = "";
         let requests = cmd.request.get_requests();
         let response = &cmd.response;
@@ -316,29 +316,31 @@ impl QueryObserver for TiFlashObserver {
 }
 
 impl AdminObserver for TiFlashObserver {
-    fn pre_exec_admin(&self, ob_ctx: &mut ObserverContext<'_>, req: &AdminRequest, should_skip: &mut bool) {
+    fn pre_exec_admin(&self, ob_ctx: &mut ObserverContext<'_>, req: &AdminRequest) -> bool {
         match req.get_cmd_type() {
             AdminCmdType::CompactLog => {
                 if !self.engine_store_server_helper.can_flush_data(ob_ctx.region().get_id(), 1) {
-                    *should_skip = true
+                    debug!("!!!!! should filter");
+                    return true;
                 }
             },
             AdminCmdType::ComputeHash | AdminCmdType::VerifyHash => {
                 // TiFlash don't support.
-                *should_skip = true
+                return true;
             },
             _ => (),
         };
+        return false;
     }
 
-    fn address_apply_result(
+    fn post_exec_admin(
         &self,
         ob_ctx: &mut ObserverContext<'_>,
         cmd: &Cmd,
         apply_state: &RaftApplyState,
         region_state: &RegionState,
     ) -> bool {
-        fail::fail_point!("on_address_apply_result_admin", |e| { e.unwrap().parse::<bool>().unwrap() });
+        fail::fail_point!("on_post_exec_admin", |e| { e.unwrap().parse::<bool>().unwrap() });
         let request = cmd.request.get_admin_request();
         let response = &cmd.response;
         let admin_reponse = response.get_admin_response();

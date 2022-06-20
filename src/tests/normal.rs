@@ -205,13 +205,31 @@ pub fn check_key(cluster: &mock_engine_store::mock_cluster::Cluster<NodeCluster>
 }
 
 #[test]
-fn test_leadership_change() {
+fn test_leadership_change_filter() {
+    test_leadership_change_impl(true);
+}
+
+#[test]
+fn test_leadership_change_no_persist() {
+    test_leadership_change_impl(false);
+}
+
+fn test_leadership_change_impl(filter: bool) {
     let (mut cluster, pd_client) = new_mock_cluster(0, 3);
 
     // Disable compact log, otherwise is may advance and persist apply state after leadership change.
     cluster.raw.cfg.raft_store.raft_log_gc_count_limit = 1000;
     cluster.raw.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10);
     cluster.raw.cfg.raft_store.snap_apply_batch_size = ReadableSize(500);
+
+    if filter {
+        // We don't handle CompactLog at all.
+        fail::cfg("can_flush_data", "return(0)").unwrap();
+    } else {
+        // We don't return Persist after handling CompactLog
+        fail::cfg("on_handle_admin_raft_cmd_no_persist", "return").unwrap();
+    }
+    fail::cfg("on_empty_cmd_normal", "return");
 
     let _ = cluster.run();
 
@@ -232,12 +250,17 @@ fn test_leadership_change() {
     let prev_states = collect_all_states(&cluster, region_id);
     cluster.raw.must_transfer_leader(region.get_id(), peer_2.clone());
 
+    // The states remain the same, since we don't observe empty cmd.
     let new_states = collect_all_states(&cluster, region_id);
     for i in prev_states.keys() {
         let old = prev_states.get(i).unwrap();
         let new = new_states.get(i).unwrap();
-        assert_eq!(old.in_memory_apply_state, new.in_memory_apply_state);
-        assert_eq!(old.in_memory_applied_term, new.in_memory_applied_term);
+        if filter {
+            // CompactLog can still change in-memory state, when exec in memory.
+            assert_eq!(old.in_memory_apply_state, new.in_memory_apply_state);
+            assert_eq!(old.in_memory_applied_term, new.in_memory_applied_term);
+        }
+        assert_eq!(old.in_disk_apply_state, new.in_disk_apply_state);
     }
 
     fail::remove("on_empty_cmd_normal");
@@ -251,6 +274,11 @@ fn test_leadership_change() {
         assert_ne!(old.in_memory_applied_term, new.in_memory_applied_term);
     }
 
+    if filter {
+        fail::remove("can_flush_data");
+    } else {
+        fail::remove("on_handle_admin_raft_cmd_no_persist");
+    }
     cluster.raw.shutdown();
 }
 
@@ -314,8 +342,8 @@ pub fn new_mock_cluster(id: u64, count: usize) -> (mock_engine_store::mock_clust
 fn test_kv_write() {
     let (mut cluster, pd_client) = new_mock_cluster(0, 3);
 
-    fail::cfg("on_address_apply_result_normal", "return(false)").unwrap();
-    fail::cfg("on_address_apply_result_admin", "return(false)").unwrap();
+    fail::cfg("on_post_exec_normal", "return(false)").unwrap();
+    fail::cfg("on_post_exec_admin", "return(false)").unwrap();
     fail::cfg("on_handle_admin_raft_cmd_no_persist", "return").unwrap();
 
     // Try to start this node, return after persisted some keys.
@@ -338,8 +366,8 @@ fn test_kv_write() {
     let r1 = cluster.raw.get_region(b"k1").get_id();
     let prev_states = collect_all_states(&cluster, r1);
 
-    fail::remove("on_address_apply_result_normal");
-    fail::remove("on_address_apply_result_admin");
+    fail::remove("on_post_exec_normal");
+    fail::remove("on_post_exec_admin");
     for i in 10..20 {
         let k = format!("k{}", i);
         let v = format!("v{}", i);
