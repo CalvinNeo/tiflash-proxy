@@ -315,13 +315,7 @@ impl EngineStoreServerWrap {
                     region.set_applied(header.index, header.term);
                 },
                 AdminCmdType::CompactLog => {
-                    let region = engine_store_server.kvstore.get_mut(&region_id).unwrap();
-                    let state = &mut region.apply_state;
-                    let compact_index = req.get_compact_log().get_compact_index();
-                    let compact_term = req.get_compact_log().get_compact_term();
-                    state.mut_truncated_state().set_index(compact_index);
-                    state.mut_truncated_state().set_term(compact_term);
-
+                    // We will modify truncated_state when returns Persist.
                     region.set_applied(header.index, header.term);
                 },
                 _ => {
@@ -329,7 +323,7 @@ impl EngineStoreServerWrap {
                 },
             }
             // do persist or not
-            match req.get_cmd_type() {
+            let res = match req.get_cmd_type() {
                 AdminCmdType::CompactLog => {
                     fail::fail_point!("on_handle_admin_raft_cmd_no_persist", |_| {
                         ffi_interfaces::EngineStoreApplyRes::None
@@ -339,7 +333,16 @@ impl EngineStoreServerWrap {
                 _ => {
                     ffi_interfaces::EngineStoreApplyRes::Persist
                 },
+            };
+            if req.get_cmd_type() == AdminCmdType::CompactLog && res == ffi_interfaces::EngineStoreApplyRes::Persist {
+                let region = engine_store_server.kvstore.get_mut(&region_id).unwrap();
+                let state = &mut region.apply_state;
+                let compact_index = req.get_compact_log().get_compact_index();
+                let compact_term = req.get_compact_log().get_compact_term();
+                state.mut_truncated_state().set_index(compact_index);
+                state.mut_truncated_state().set_term(compact_term);
             }
+            res
         };
 
         let res = match (*self.engine_store_server).kvstore.entry(region_id) {
