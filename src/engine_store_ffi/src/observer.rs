@@ -68,7 +68,7 @@ pub struct TiFlashObserver {
     pub engine_store_server_helper: &'static crate::EngineStoreServerHelper,
     pub engine: engine_tiflash::RocksEngine,
     pub sst_importer: Arc<SSTImporter>,
-    pub pre_handle_snapshot_ctx: Arc<Mutex<RefCell<PrehandleContext>>>,
+    pub pre_handle_snapshot_ctx: Arc<Mutex<PrehandleContext>>,
 }
 
 impl Clone for TiFlashObserver {
@@ -99,8 +99,7 @@ impl TiFlashObserver {
             engine_store_server_helper,
             engine,
             sst_importer,
-            pre_handle_snapshot_ctx: Arc::new(Mutex::new(
-                RefCell::new(PrehandleContext::default()),
+            pre_handle_snapshot_ctx: Arc::new(Mutex::new(PrehandleContext::default(),
             )),
         }
     }
@@ -501,11 +500,10 @@ impl ApplySnapshotObserver for TiFlashObserver {
         let (sender, receiver) = mpsc::channel();
         let task = Arc::new(PrehandleTask::new(receiver, peer_id));
         {
-            let lock = self.pre_handle_snapshot_ctx
+            let mut lock = self.pre_handle_snapshot_ctx
                 .lock()
                 .unwrap();
-            let mut ctx = lock
-                .borrow_mut();
+            let mut ctx = lock.deref_mut();
             ctx.tracer.insert(snap_key.clone(), task.clone());
         }
 
@@ -533,8 +531,8 @@ impl ApplySnapshotObserver for TiFlashObserver {
     ) {
         fail::fail_point!("on_ob_post_apply_snapshot", |_| {});
         let maybe_snapshot = {
-            let lock = self.pre_handle_snapshot_ctx.lock().unwrap();
-            let mut ctx = lock.borrow_mut();
+            let mut lock = self.pre_handle_snapshot_ctx.lock().unwrap();
+            let mut ctx = lock.deref_mut();
             ctx.tracer.remove(snap_key)
         };
         let need_retry = match maybe_snapshot {

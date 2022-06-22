@@ -38,7 +38,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use kvproto::raft_cmdpb::{AdminRequest, AdminCmdType};
 use raftstore::coprocessor::{ConsistencyCheckMethod, Coprocessor};
 use raftstore::store::util::find_peer;
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 
 #[test]
 fn test_config() {

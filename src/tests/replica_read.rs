@@ -157,8 +157,6 @@ fn test_read_index() {
     cluster.raw.cfg.raft_store.raft_heartbeat_ticks = 1;
     pd_client.disable_default_operator();
 
-    tikv_util::debug!("!!!! ZZZZZZ");
-
     // Set region and peers
     let r1 = cluster.run_conf_change();
     let p1 = new_peer(1, 1);
