@@ -134,6 +134,64 @@ pub fn make_new_region(
     region
 }
 
+fn write_kv_in_mem(region: &mut Box<Region>, cf_index: usize, k: &[u8], v: &[u8]) {
+    let data = &mut region.data[cf_index];
+    let pending_delete = &mut region.pending_delete[cf_index];
+    let pending_write = &mut region.pending_write[cf_index];
+    pending_delete.remove(k);
+    data.insert(k.to_vec(), v.to_vec());
+    pending_write.insert(k.to_vec(), v.to_vec());
+}
+
+fn delete_kv_in_mem(region: &mut Box<Region>, cf_index: usize, k: &[u8]) {
+    let data = &mut region.data[cf_index];
+    let pending_delete = &mut region.pending_delete[cf_index];
+    pending_delete.insert(k.to_vec());
+    data.remove(k);
+}
+
+unsafe fn load_from_db(store: &mut EngineStoreServer, region: &mut Box<Region>) {
+    let kv = &mut store.engines.as_mut().unwrap().kv;
+    for cf in 0..3 {
+        let cf_name = cf_to_name(cf.into());
+        region.data[cf].clear();
+        region.pending_delete[cf].clear();
+        region.pending_write[cf].clear();
+        let start = region.region.get_start_key().to_owned();
+        let end = region.region.get_end_key().to_owned();
+        kv.scan_cf(cf_name, &start, &end, false, |k ,v| {
+            region.data[cf].insert(k.to_vec(), v.to_vec());
+            Ok(true)
+        });
+    }
+}
+
+unsafe fn write_to_db_data(store: &mut EngineStoreServer, region: &mut Box<Region>) {
+    info!("mock flush to engine";
+            "region" => ?region.region,
+            "store_id" => store.id,
+        );
+    let kv = &mut store.engines.as_mut().unwrap().kv;
+    for cf in 0..3 {
+        let pending_write = std::mem::take(region.pending_write.as_mut().get_mut(cf).unwrap());
+        let mut pending_remove = std::mem::take(region.pending_delete.as_mut().get_mut(cf).unwrap());
+        for (k, v) in pending_write.into_iter() {
+            let tikv_key = keys::data_key(k.as_slice());
+            let cf_name = cf_to_name(cf.into());
+            if !pending_remove.contains(&k) {
+                kv.rocks.put_cf(cf_name, &tikv_key.as_slice(), &v);
+            } else {
+                pending_remove.remove(&k);
+            }
+        }
+        let cf_name = cf_to_name(cf.into());
+        for k in pending_remove.into_iter() {
+            let tikv_key = keys::data_key(k.as_slice());
+            kv.rocks.delete_cf(cf_name, &tikv_key);
+        }
+    }
+}
+
 impl EngineStoreServerWrap {
     pub fn new(
         engine_store_server: *mut EngineStoreServer,
@@ -371,53 +429,11 @@ impl EngineStoreServerWrap {
         };
         match res {
             ffi_interfaces::EngineStoreApplyRes::Persist => {
-                Self::write_to_db_data(&mut (*self.engine_store_server), region);
+                write_to_db_data(&mut (*self.engine_store_server), region);
             }
             _ => (),
         };
         res
-    }
-
-    unsafe fn load_from_db(store: &mut EngineStoreServer, region: &mut Box<Region>) {
-        let kv = &mut store.engines.as_mut().unwrap().kv;
-        for cf in 0..3 {
-            let cf_name = cf_to_name(cf.into());
-            region.data[cf].clear();
-            region.pending_delete[cf].clear();
-            region.pending_write[cf].clear();
-            let start = region.region.get_start_key().to_owned();
-            let end = region.region.get_end_key().to_owned();
-            kv.scan_cf(cf_name, &start, &end, false, |k ,v| {
-                region.data[cf].insert(k.to_vec(), v.to_vec());
-                Ok(true)
-            });
-        }
-    }
-
-    unsafe fn write_to_db_data(store: &mut EngineStoreServer, region: &mut Box<Region>) {
-        info!("mock flush to engine";
-            "region" => ?region.region,
-            "store_id" => store.id,
-        );
-        let kv = &mut store.engines.as_mut().unwrap().kv;
-        for cf in 0..3 {
-            let pending_write = std::mem::take(region.pending_write.as_mut().get_mut(cf).unwrap());
-            let mut pending_remove = std::mem::take(region.pending_delete.as_mut().get_mut(cf).unwrap());
-            for (k, v) in pending_write.into_iter() {
-                let tikv_key = keys::data_key(k.as_slice());
-                let cf_name = cf_to_name(cf.into());
-                if !pending_remove.contains(&k) {
-                    kv.rocks.put_cf(cf_name, &tikv_key.as_slice(), &v);
-                } else {
-                    pending_remove.remove(&k);
-                }
-            }
-            let cf_name = cf_to_name(cf.into());
-            for k in pending_remove.into_iter() {
-                let tikv_key = keys::data_key(k.as_slice());
-                kv.rocks.delete_cf(cf_name, &tikv_key);
-            }
-        }
     }
 
     unsafe fn handle_write_raft_cmd(
@@ -780,22 +796,6 @@ struct PrehandledSnapshot {
     pub region: std::option::Option<Region>,
 }
 
-fn write_kv_in_mem(region: &mut Box<Region>, cf_index: usize, k: &[u8], v: &[u8]) {
-    let data = &mut region.data[cf_index];
-    let pending_delete = &mut region.pending_delete[cf_index];
-    let pending_write = &mut region.pending_write[cf_index];
-    pending_delete.remove(k);
-    data.insert(k.to_vec(), v.to_vec());
-    pending_write.insert(k.to_vec(), v.to_vec());
-}
-
-fn delete_kv_in_mem(region: &mut Box<Region>, cf_index: usize, k: &[u8]) {
-    let data = &mut region.data[cf_index];
-    let pending_delete = &mut region.pending_delete[cf_index];
-    pending_delete.insert(k.to_vec());
-    data.remove(k);
-}
-
 unsafe extern "C" fn ffi_pre_handle_snapshot(
     arg1: *mut ffi_interfaces::EngineStoreServerWrap,
     region_buff: ffi_interfaces::BaseBuffView,
@@ -879,7 +879,7 @@ unsafe extern "C" fn ffi_apply_pre_handled_snapshot(
 
     debug!("apply snaps peer_id {} region {:?}", node_id, &region.region);
 
-    EngineStoreServerWrap::write_to_db_data(&mut (*store.engine_store_server), region);
+    write_to_db_data(&mut (*store.engine_store_server), region);
 }
 
 unsafe extern "C" fn ffi_handle_ingest_sst(
@@ -925,7 +925,7 @@ unsafe extern "C" fn ffi_handle_ingest_sst(
         region.apply_state.mut_truncated_state().set_term(term);
     }
 
-    EngineStoreServerWrap::write_to_db_data(&mut (*store.engine_store_server), region);
+    write_to_db_data(&mut (*store.engine_store_server), region);
     ffi_interfaces::EngineStoreApplyRes::Persist
 }
 
