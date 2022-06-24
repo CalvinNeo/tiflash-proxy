@@ -3,16 +3,16 @@ use engine_store_ffi::{
     ffi_gc_rust_ptr, ffi_make_async_waker, ffi_make_read_index_task, ffi_make_timer_task,
     ffi_poll_read_index_task, ffi_poll_timer_task, ProtoMsgBaseBuff, RawVoidPtr,
 };
+use lazy_static::lazy_static;
+use mock_engine_store::node::NodeCluster;
 use std::collections::hash_map::{Entry, RandomState};
+use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
-use mock_engine_store::node::NodeCluster;
-use tikv_util::{error, info, warn, debug};
-use lazy_static::lazy_static;
-use test_raftstore::TestPdClient;
 use test_raftstore::new_peer;
-use std::ops::Deref;
+use test_raftstore::TestPdClient;
+use tikv_util::{debug, error, info, warn};
 
 #[derive(Default)]
 struct GcMonitor {

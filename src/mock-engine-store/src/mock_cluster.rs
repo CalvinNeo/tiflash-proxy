@@ -30,15 +30,15 @@ use tikv_util::thread_group::GroupProperties;
 use tikv_util::HandyRwLock;
 use tikv_util::{debug, info, warn};
 
+use engine_rocks::raw::DB;
+use engine_store_ffi::config::ProxyConfig;
 use file_system::IORateLimiter;
+use kvproto::metapb;
+use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
+use raftstore::{Error, Result};
 use std::borrow::BorrowMut;
 use std::cell::RefCell;
 use tempfile::TempDir;
-use engine_store_ffi::config::ProxyConfig;
-use engine_rocks::raw::DB;
-use raftstore::{Error, Result};
-use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
-use kvproto::metapb;
 // mock cluster
 
 pub struct FFIHelperSet {
@@ -157,7 +157,8 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
 
     pub fn create_engines(&mut self) {
         self.raw.io_rate_limiter = Some(Arc::new(
-            self.raw.cfg
+            self.raw
+                .cfg
                 .storage
                 .io_rate_limit
                 .build(true /*enable_statistics*/),
@@ -208,7 +209,11 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
             engine_store_server_helper: helper,
         });
 
-        engines.kv.init(helper_sz, self.proxy_cfg.snap_handle_pool_size, Some(ffi_hub));
+        engines.kv.init(
+            helper_sz,
+            self.proxy_cfg.snap_handle_pool_size,
+            Some(ffi_hub),
+        );
 
         assert_ne!(engines.kv.engine_store_server_helper, 0);
 

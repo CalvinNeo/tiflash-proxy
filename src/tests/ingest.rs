@@ -7,12 +7,12 @@ use test_raftstore::{must_get_equal, must_get_none, TestPdClient};
 extern crate rocksdb;
 use ::rocksdb::DB;
 use engine_tiflash::*;
-use engine_traits::{Iterable, MiscExt};
 use engine_traits::Iterator;
 use engine_traits::Peekable;
 use engine_traits::SeekKey;
 use engine_traits::{Error, Result};
 use engine_traits::{ExternalSstFileInfo, SstExt, SstReader, SstWriter, SstWriterBuilder};
+use engine_traits::{Iterable, MiscExt};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::raft_serverpb::{RaftApplyState, RegionLocalState, StoreIdent};
 
@@ -25,18 +25,18 @@ use kvproto::kvrpcpb::*;
 use tempfile::Builder;
 use tikv_util::HandyRwLock;
 
-use txn_types::TimeStamp;
-use std::path::{Path, PathBuf};
-use test_sst_importer::gen_sst_file_with_kvs;
-use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminRequest, CmdType, RaftCmdRequest,
-    RaftCmdResponse, Request, StatusCmdType, StatusRequest,
-};
 use kvproto::import_sstpb::SstMeta;
-use sst_importer::SSTImporter;
-use tempfile::TempDir;
+use kvproto::raft_cmdpb::{
+    AdminCmdType, AdminRequest, CmdType, RaftCmdRequest, RaftCmdResponse, Request, StatusCmdType,
+    StatusRequest,
+};
 use sst_importer::Config as ImportConfig;
+use sst_importer::SSTImporter;
+use std::path::{Path, PathBuf};
+use tempfile::TempDir;
 use test_raftstore::Config;
+use test_sst_importer::gen_sst_file_with_kvs;
+use txn_types::TimeStamp;
 
 pub fn new_ingest_sst_cmd(meta: SstMeta) -> Request {
     let mut cmd = Request::default();
@@ -48,7 +48,9 @@ pub fn new_ingest_sst_cmd(meta: SstMeta) -> Request {
 pub fn create_tmp_importer(cfg: &Config, kv_path: &str) -> (PathBuf, Arc<SSTImporter>) {
     let dir = Path::new(kv_path).join("import-sst");
     let importer = {
-        Arc::new(SSTImporter::new(&cfg.import, dir.clone(), None, cfg.storage.api_version()).unwrap())
+        Arc::new(
+            SSTImporter::new(&cfg.import, dir.clone(), None, cfg.storage.api_version()).unwrap(),
+        )
     };
     (dir, importer)
 }
@@ -92,12 +94,9 @@ fn test_handle_ingest_sst() {
     std::fs::copy(src.clone(), dst);
 
     let req = new_ingest_sst_cmd(meta);
-    let resp = cluster.raw.request(
-        key.as_bytes(),
-        vec![req],
-        false,
-        Duration::from_secs(5),
-    );
+    let resp = cluster
+        .raw
+        .request(key.as_bytes(), vec![req], false, Duration::from_secs(5));
 
     crate::normal::check_key(&cluster, b"k66", b"2", None, Some(true), None);
 

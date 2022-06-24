@@ -1,11 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::any::Any;
-use std::fs;
-use std::path::Path;
-use std::sync::{Arc, Mutex, mpsc};
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
+use std::sync::{mpsc, Arc, Mutex};
 
 use engine_traits::{
     Error, IterOptions, Iterable, KvEngine, Peekable, ReadOptions, Result, SyncMutable,
@@ -23,12 +23,12 @@ use engine_rocks::rocks_metrics_defs::{
 };
 use engine_rocks::util::get_cf_handle;
 use engine_rocks::{RocksEngineIterator, RocksSnapshot};
-use yatp::pool::{Builder, ThreadPool};
-use yatp::task::future::TaskCell;
-use std::collections::hash_map::RandomState;
 use raftstore::store::SnapKey;
+use std::collections::hash_map::RandomState;
 use std::fmt::Formatter;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use yatp::pool::{Builder, ThreadPool};
+use yatp::task::future::TaskCell;
 
 pub struct FsStatsExt {
     pub used: u64,
@@ -40,8 +40,7 @@ pub trait FFIHubInner {
     fn get_store_stats(&self) -> FsStatsExt;
 }
 
-pub trait FFIHub: FFIHubInner + Send + Sync {
-}
+pub trait FFIHub: FFIHubInner + Send + Sync {}
 
 #[derive(Clone)]
 pub struct RocksEngine {
@@ -58,13 +57,21 @@ impl std::fmt::Debug for RocksEngine {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TiFlashEngine")
             .field("rocks", &self.rocks)
-            .field("engine_store_server_helper", &self.engine_store_server_helper)
+            .field(
+                "engine_store_server_helper",
+                &self.engine_store_server_helper,
+            )
             .finish()
     }
 }
 
 impl RocksEngine {
-    pub fn init(&mut self, engine_store_server_helper: isize, snap_handle_pool_size: usize, ffi_hub: Option<Arc<dyn FFIHubInner + Send + Sync>>) {
+    pub fn init(
+        &mut self,
+        engine_store_server_helper: isize,
+        snap_handle_pool_size: usize,
+        ffi_hub: Option<Arc<dyn FFIHubInner + Send + Sync>>,
+    ) {
         self.engine_store_server_helper = engine_store_server_helper;
         let snap_pool = Builder::new(tikv_util::thd_name!("region-task"))
             .max_thread_count(snap_handle_pool_size)
@@ -168,7 +175,10 @@ impl KvEngine for RocksEngine {
         let in_queue = self.pending_applies_count.load(Ordering::Relaxed);
         // if queue is full, we should begin to handle
         let can = in_queue > self.pool_capacity;
-        fail::fail_point!("on_can_apply_snapshot", |e| e.unwrap().parse::<bool>().unwrap());
+        fail::fail_point!("on_can_apply_snapshot", |e| e
+            .unwrap()
+            .parse::<bool>()
+            .unwrap());
         can
     }
 }

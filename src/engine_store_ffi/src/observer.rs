@@ -1,5 +1,7 @@
+use crate::interfaces::root::DB as ffi_interfaces;
 use crate::interfaces::root::DB::EngineStoreApplyRes;
 use crate::{ColumnFamilyType, RaftCmdHeader, WriteCmdType};
+use engine_tiflash::FsStatsExt;
 use engine_traits::{Peekable, SyncMutable};
 use kvproto::metapb::Region;
 use kvproto::raft_cmdpb::{
@@ -18,15 +20,13 @@ use raftstore::store::SnapKey;
 use sst_importer::SSTImporter;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex, RwLock};
-use tikv_util::{error, info, warn, debug};
+use tikv_util::{debug, error, info, warn};
 use yatp::pool::{Builder, ThreadPool};
 use yatp::task::future::TaskCell;
-use std::ops::{Deref, DerefMut};
-use crate::interfaces::root::DB as ffi_interfaces;
-use engine_tiflash::FsStatsExt;
 
 pub struct PtrWrapper(crate::RawCppPtr);
 
@@ -51,7 +51,9 @@ unsafe impl Sync for TiFlashFFIHub {}
 
 impl engine_tiflash::FFIHubInner for TiFlashFFIHub {
     fn get_store_stats(&self) -> engine_tiflash::FsStatsExt {
-        self.engine_store_server_helper.handle_compute_store_stats().into()
+        self.engine_store_server_helper
+            .handle_compute_store_stats()
+            .into()
     }
 }
 
@@ -99,8 +101,7 @@ impl TiFlashObserver {
             engine_store_server_helper,
             engine,
             sst_importer,
-            pre_handle_snapshot_ctx: Arc::new(Mutex::new(PrehandleContext::default(),
-            )),
+            pre_handle_snapshot_ctx: Arc::new(Mutex::new(PrehandleContext::default())),
         }
     }
 
@@ -157,7 +158,9 @@ impl TiFlashObserver {
             }
 
             // We still need this to filter error ssts.
-            if let Err(e) = raftstore::store::fsm::apply::check_sst_for_ingestion(sst, &ob_ctx.region()) {
+            if let Err(e) =
+                raftstore::store::fsm::apply::check_sst_for_ingestion(sst, &ob_ctx.region())
+            {
                 break;
             }
 
@@ -208,12 +211,17 @@ impl QueryObserver for TiFlashObserver {
         apply_state: &RaftApplyState,
         region_state: &RegionState,
     ) -> bool {
-        fail::fail_point!("on_post_exec_normal", |e| { e.unwrap().parse::<bool>().unwrap() });
+        fail::fail_point!("on_post_exec_normal", |e| {
+            e.unwrap().parse::<bool>().unwrap()
+        });
         const NONE_STR: &str = "";
         let requests = cmd.request.get_requests();
         let response = &cmd.response;
         if response.get_header().has_error() {
-            debug!("error occurs when apply_raft_cmd, {:?}", response.get_header().get_error());
+            debug!(
+                "error occurs when apply_raft_cmd, {:?}",
+                response.get_header().get_error()
+            );
             // We still need to pass a dummy cmd, to forward updates.
             let cmd_dummy = crate::WriteCmds::new();
             self.engine_store_server_helper.handle_write_raft_cmd(
@@ -294,19 +302,18 @@ impl QueryObserver for TiFlashObserver {
             }
         } else {
             let flash_res = {
-                info!("!!!! write cmds index {} term {} data {:?} peer_id {}", cmd.index, cmd.term, cmds, region_state.peer_id);
+                info!(
+                    "!!!! write cmds index {} term {} data {:?} peer_id {}",
+                    cmd.index, cmd.term, cmds, region_state.peer_id
+                );
                 self.engine_store_server_helper.handle_write_raft_cmd(
                     &cmds,
                     RaftCmdHeader::new(ob_ctx.region().get_id(), cmd.index, cmd.term),
                 )
             };
             match flash_res {
-                EngineStoreApplyRes::None => {
-                    false
-                }
-                EngineStoreApplyRes::Persist => {
-                    true
-                }
+                EngineStoreApplyRes::None => false,
+                EngineStoreApplyRes::Persist => true,
                 EngineStoreApplyRes::NotFound => false,
             }
         };
@@ -318,18 +325,21 @@ impl AdminObserver for TiFlashObserver {
     fn pre_exec_admin(&self, ob_ctx: &mut ObserverContext<'_>, req: &AdminRequest) -> bool {
         match req.get_cmd_type() {
             AdminCmdType::CompactLog => {
-                if !self.engine_store_server_helper.can_flush_data(ob_ctx.region().get_id(), 1) {
+                if !self
+                    .engine_store_server_helper
+                    .can_flush_data(ob_ctx.region().get_id(), 1)
+                {
                     debug!("!!!!! should filter";
                         "region" => ?ob_ctx.region(),
                         "req" => ?req,
                     );
                     return true;
                 }
-            },
+            }
             AdminCmdType::ComputeHash | AdminCmdType::VerifyHash => {
                 // TiFlash don't support.
                 return true;
-            },
+            }
             _ => (),
         };
         return false;
@@ -342,14 +352,19 @@ impl AdminObserver for TiFlashObserver {
         apply_state: &RaftApplyState,
         region_state: &RegionState,
     ) -> bool {
-        fail::fail_point!("on_post_exec_admin", |e| { e.unwrap().parse::<bool>().unwrap() });
+        fail::fail_point!("on_post_exec_admin", |e| {
+            e.unwrap().parse::<bool>().unwrap()
+        });
         let request = cmd.request.get_admin_request();
         let response = &cmd.response;
         let admin_reponse = response.get_admin_response();
         let cmd_type = request.get_cmd_type();
 
         if response.get_header().has_error() {
-            debug!("error occurs when apply_raft_cmd, {:?}", response.get_header().get_error());
+            debug!(
+                "error occurs when apply_raft_cmd, {:?}",
+                response.get_header().get_error()
+            );
             // We still need to pass a dummy cmd, to forward updates.
             let cmd_dummy = crate::WriteCmds::new();
             self.engine_store_server_helper.handle_write_raft_cmd(
@@ -383,31 +398,29 @@ impl AdminObserver for TiFlashObserver {
 
         let mut new_response = None;
         match cmd_type {
-            AdminCmdType::CommitMerge | AdminCmdType::PrepareMerge
-                | AdminCmdType::RollbackMerge => {
+            AdminCmdType::CommitMerge
+            | AdminCmdType::PrepareMerge
+            | AdminCmdType::RollbackMerge => {
                 let mut r = AdminResponse::default();
-                r.mut_split().set_left(region_state.modified_region.as_ref().unwrap().clone());
+                r.mut_split()
+                    .set_left(region_state.modified_region.as_ref().unwrap().clone());
                 new_response = Some(r);
-            },
+            }
             _ => (),
         }
 
         let flash_res = {
             match new_response {
-                Some(r) => {
-                    self.engine_store_server_helper.handle_admin_raft_cmd(
-                        &request,
-                        &r,
-                        RaftCmdHeader::new(ob_ctx.region().get_id(), cmd.index, cmd.term),
-                    )
-                },
-                None => {
-                    self.engine_store_server_helper.handle_admin_raft_cmd(
-                        &request,
-                        &admin_reponse,
-                        RaftCmdHeader::new(ob_ctx.region().get_id(), cmd.index, cmd.term),
-                    )
-                }
+                Some(r) => self.engine_store_server_helper.handle_admin_raft_cmd(
+                    &request,
+                    &r,
+                    RaftCmdHeader::new(ob_ctx.region().get_id(), cmd.index, cmd.term),
+                ),
+                None => self.engine_store_server_helper.handle_admin_raft_cmd(
+                    &request,
+                    &admin_reponse,
+                    RaftCmdHeader::new(ob_ctx.region().get_id(), cmd.index, cmd.term),
+                ),
             }
         };
         let persist = match flash_res {
@@ -458,10 +471,13 @@ fn retrieve_sst_files(snap: &raftstore::store::Snapshot) -> Vec<(PathBuf, Column
     ssts
 }
 
-fn pre_handle_snapshot_impl(engine_store_server_helper: &'static crate::EngineStoreServerHelper,
-                            peer_id: u64, ssts: Vec<(PathBuf, ColumnFamilyType)>,
-                            region: &Region, snap_key: &SnapKey) -> PtrWrapper {
-
+fn pre_handle_snapshot_impl(
+    engine_store_server_helper: &'static crate::EngineStoreServerHelper,
+    peer_id: u64,
+    ssts: Vec<(PathBuf, ColumnFamilyType)>,
+    region: &Region,
+    snap_key: &SnapKey,
+) -> PtrWrapper {
     let idx = snap_key.idx;
     let term = snap_key.term;
     let ptr = {
@@ -500,9 +516,7 @@ impl ApplySnapshotObserver for TiFlashObserver {
         let (sender, receiver) = mpsc::channel();
         let task = Arc::new(PrehandleTask::new(receiver, peer_id));
         {
-            let mut lock = self.pre_handle_snapshot_ctx
-                .lock()
-                .unwrap();
+            let mut lock = self.pre_handle_snapshot_ctx.lock().unwrap();
             let mut ctx = lock.deref_mut();
             ctx.tracer.insert(snap_key.clone(), task.clone());
         }
@@ -511,15 +525,25 @@ impl ApplySnapshotObserver for TiFlashObserver {
         let region = ob_ctx.region().clone();
         let snap_key = snap_key.clone();
         let ssts = retrieve_sst_files(snap);
-        self.engine.pending_applies_count.fetch_add(1, Ordering::Relaxed);
-        self.engine.apply_snap_pool.as_ref().unwrap().spawn(async move {
-            // The original implementation is in `Snapshot`, so we don't need to care abort lifetime.
-            fail::fail_point!("before_actually_pre_handle", |_| { });
-            let res = pre_handle_snapshot_impl(engine_store_server_helper,
-                                                        task.peer_id, ssts,
-                                                        &region, &snap_key);
-            sender.send(res);
-        });
+        self.engine
+            .pending_applies_count
+            .fetch_add(1, Ordering::Relaxed);
+        self.engine
+            .apply_snap_pool
+            .as_ref()
+            .unwrap()
+            .spawn(async move {
+                // The original implementation is in `Snapshot`, so we don't need to care abort lifetime.
+                fail::fail_point!("before_actually_pre_handle", |_| {});
+                let res = pre_handle_snapshot_impl(
+                    engine_store_server_helper,
+                    task.peer_id,
+                    ssts,
+                    &region,
+                    &snap_key,
+                );
+                sender.send(res);
+            });
     }
 
     fn post_apply_snapshot(
@@ -537,21 +561,24 @@ impl ApplySnapshotObserver for TiFlashObserver {
         };
         let need_retry = match maybe_snapshot {
             Some(t) => {
-                 let neer_retry = match t.recv.recv() {
+                let neer_retry = match t.recv.recv() {
                     Ok(snap_ptr) => {
                         debug!("get prehandled snapshot success");
-                        self.engine_store_server_helper.apply_pre_handled_snapshot(snap_ptr.0);
+                        self.engine_store_server_helper
+                            .apply_pre_handled_snapshot(snap_ptr.0);
                         false
-                    },
+                    }
                     Err(_) => {
                         debug!("background pre-handle snapshot get error";
                             "snap_key" => ?snap_key,
                             "region" => ?ob_ctx.region(),
                         );
                         true
-                    },
+                    }
                 };
-                self.engine.pending_applies_count.fetch_sub(1, Ordering::Relaxed);
+                self.engine
+                    .pending_applies_count
+                    .fetch_sub(1, Ordering::Relaxed);
                 neer_retry
             }
             None => {
@@ -562,9 +589,13 @@ impl ApplySnapshotObserver for TiFlashObserver {
         };
         if need_retry {
             let ssts = retrieve_sst_files(snap);
-            let ptr = pre_handle_snapshot_impl(self.engine_store_server_helper,
-                                               peer_id, ssts,
-                                               ob_ctx.region(), snap_key);
+            let ptr = pre_handle_snapshot_impl(
+                self.engine_store_server_helper,
+                peer_id,
+                ssts,
+                ob_ctx.region(),
+                snap_key,
+            );
             debug!("re-gen pre-handled snapshot success";
                 "snap_key" => ?snap_key,
                 "region" => ?ob_ctx.region(),
@@ -576,9 +607,15 @@ impl ApplySnapshotObserver for TiFlashObserver {
 }
 
 impl RegionChangeObserver for TiFlashObserver {
-    fn on_region_changed(&self, ob_ctx: &mut ObserverContext<'_>, e: RegionChangeEvent, _: StateRole) {
+    fn on_region_changed(
+        &self,
+        ob_ctx: &mut ObserverContext<'_>,
+        e: RegionChangeEvent,
+        _: StateRole,
+    ) {
         if e == RegionChangeEvent::Destroy {
-            self.engine_store_server_helper.handle_destroy(ob_ctx.region().get_id());
+            self.engine_store_server_helper
+                .handle_destroy(ob_ctx.region().get_id());
         }
     }
 }

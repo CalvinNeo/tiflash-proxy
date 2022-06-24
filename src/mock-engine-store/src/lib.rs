@@ -1,12 +1,14 @@
 #![feature(slice_take)]
 
+use collections::HashSet;
 use encryption::DataKeyManager;
 pub use engine_store_ffi::interfaces::root::DB as ffi_interfaces;
 use engine_store_ffi::{
     EngineStoreServerHelper, RaftStoreProxyFFIHelper, RawCppPtr, UnwrapExternCFunc,
 };
-use engine_traits::{Engines, SyncMutable, Iterable};
+use engine_traits::{Engines, Iterable, SyncMutable};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use kvproto::raft_cmdpb::AdminCmdType;
 use protobuf::Message;
 use raftstore::store::RaftRouter;
 use std::collections::BTreeMap;
@@ -19,8 +21,6 @@ use test_raftstore::{Simulator, TestPdClient};
 use tikv::config::TiKvConfig;
 use tikv::server::{Node, Result as ServerResult};
 use tikv_util::{debug, info, warn};
-use kvproto::raft_cmdpb::AdminCmdType;
-use collections::HashSet;
 
 pub mod mock_cluster;
 pub mod node;
@@ -44,7 +44,7 @@ pub struct Region {
 }
 
 impl Region {
-    fn set_applied(&mut self, index: u64, term:u64) {
+    fn set_applied(&mut self, index: u64, term: u64) {
         self.apply_state.set_applied_index(index);
         self.applied_term = term;
     }
@@ -80,13 +80,18 @@ impl EngineStoreServer {
         }
     }
 
-    pub fn get_mem(&self, region_id: u64, cf: ffi_interfaces::ColumnFamilyType, key: &Vec<u8>) -> Option<&Vec<u8>> {
+    pub fn get_mem(
+        &self,
+        region_id: u64,
+        cf: ffi_interfaces::ColumnFamilyType,
+        key: &Vec<u8>,
+    ) -> Option<&Vec<u8>> {
         match self.kvstore.get(&region_id) {
             Some(region) => {
                 let bmap = &region.data[cf as usize];
                 bmap.get(key)
-            },
-            None => None
+            }
+            None => None,
         }
     }
 }
@@ -130,7 +135,10 @@ pub fn make_new_region(
         .apply_state
         .mut_truncated_state()
         .set_term(raftstore::store::RAFT_INIT_LOG_TERM);
-    region.set_applied(raftstore::store::RAFT_INIT_LOG_INDEX, raftstore::store::RAFT_INIT_LOG_TERM);
+    region.set_applied(
+        raftstore::store::RAFT_INIT_LOG_INDEX,
+        raftstore::store::RAFT_INIT_LOG_TERM,
+    );
     region
 }
 
@@ -159,7 +167,7 @@ unsafe fn load_from_db(store: &mut EngineStoreServer, region: &mut Box<Region>) 
         region.pending_write[cf].clear();
         let start = region.region.get_start_key().to_owned();
         let end = region.region.get_end_key().to_owned();
-        kv.scan_cf(cf_name, &start, &end, false, |k ,v| {
+        kv.scan_cf(cf_name, &start, &end, false, |k, v| {
             region.data[cf].insert(k.to_vec(), v.to_vec());
             Ok(true)
         });
@@ -168,13 +176,14 @@ unsafe fn load_from_db(store: &mut EngineStoreServer, region: &mut Box<Region>) 
 
 unsafe fn write_to_db_data(store: &mut EngineStoreServer, region: &mut Box<Region>) {
     info!("mock flush to engine";
-            "region" => ?region.region,
-            "store_id" => store.id,
-        );
+        "region" => ?region.region,
+        "store_id" => store.id,
+    );
     let kv = &mut store.engines.as_mut().unwrap().kv;
     for cf in 0..3 {
         let pending_write = std::mem::take(region.pending_write.as_mut().get_mut(cf).unwrap());
-        let mut pending_remove = std::mem::take(region.pending_delete.as_mut().get_mut(cf).unwrap());
+        let mut pending_remove =
+            std::mem::take(region.pending_delete.as_mut().get_mut(cf).unwrap());
         for (k, v) in pending_write.into_iter() {
             let tikv_key = keys::data_key(k.as_slice());
             let cf_name = cf_to_name(cf.into());
@@ -214,194 +223,196 @@ impl EngineStoreServerWrap {
         let region_id = header.region_id;
         let node_id = (*self.engine_store_server).id;
         info!("handle_admin_raft_cmd"; "request"=>?req, "response"=>?resp, "header"=>?header, "region_id"=>header.region_id);
-        let do_handle_admin_raft_cmd = move |region: &mut Box<Region>, engine_store_server: &mut EngineStoreServer| {
-            if region.apply_state.get_applied_index() >= header.index {
-                return ffi_interfaces::EngineStoreApplyRes::Persist;
-            }
-            match req.get_cmd_type() {
-                AdminCmdType::ChangePeer | AdminCmdType::ChangePeerV2 => {
-                    let new_region_meta = resp.get_change_peer().get_region();
-                    let old_peer_id = {
-                        let old_region = engine_store_server.kvstore.get_mut(&region_id).unwrap();
-                        old_region.region = new_region_meta.clone();
-                        region.set_applied(header.index, header.term);
-                        old_region.peer.get_store_id()
-                    };
-
-                    let mut do_remove = true;
-                    if old_peer_id != 0 {
-                        for peer in new_region_meta.get_peers().iter() {
-                            if peer.get_store_id() == old_peer_id {
-                                // Should not remove region
-                                do_remove = false;
-                            }
-                        }
-                    } else {
-                        // If old_peer_id is 0, seems old_region.peer is not set, just neglect for convenience.
-                        do_remove = false;
-                    }
-                    if do_remove {
-                        let removed = engine_store_server.kvstore.remove(&region_id);
-                        // We need to also remove apply state, thus we need to know peer_id
-                        debug!(
-                            "Remove region {:?} peer_id {} at node {}, for new meta {:?}",
-                            removed.unwrap().region,
-                            old_peer_id,
-                            node_id,
-                            new_region_meta
-                        );
-                    }
-                },
-                AdminCmdType::BatchSplit => {
-                    let regions = resp.get_splits().regions.as_ref();
-
-                    for i in 0..regions.len() {
-                        let region_meta = regions.get(i).unwrap();
-                        if region_meta.id == region_id {
-                            // This is the derived region
-                            debug!(
-                                "region {} is derived by split at peer {} with meta {:?}",
-                                region_meta.id, node_id, region_meta
-                            );
-                            assert!(engine_store_server.kvstore.contains_key(&region_meta.id));
-                            engine_store_server
-                                .kvstore
-                                .get_mut(&region_meta.id)
-                                .unwrap()
-                                .region = region_meta.clone();
-                        } else {
-                            // Should split data into new region
-                            debug!(
-                                "new region {} generated by split at peer {} with meta {:?}",
-                                region_meta.id, node_id, region_meta
-                            );
-                            let mut new_region =
-                                make_new_region(Some(region_meta.clone()), Some(node_id));
-
-                            // No need to split data because all KV are stored in the same RocksDB.
-                            // TODO But we still need to clean all in-memory data.
-                            // We can't assert `region_meta.id` is brand new here
-                            engine_store_server
-                                .kvstore
-                                .insert(region_meta.id, Box::new(new_region));
-                        }
-                    }
-                },
-                AdminCmdType::PrepareMerge => {
-                    let tikv_region = resp.get_split().get_left();
-
-                    let target = req.prepare_merge.as_ref().unwrap().target.as_ref();
-                    let region_meta = &mut (engine_store_server
-                        .kvstore
-                        .get_mut(&region_id)
-                        .unwrap()
-                        .region);
-                    let region_epoch = region_meta.region_epoch.as_mut().unwrap();
-
-                    let new_version = region_epoch.version + 1;
-                    region_epoch.set_version(new_version);
-                    assert_eq!(tikv_region.get_region_epoch().get_version(), new_version);
-
-                    let conf_version = region_epoch.conf_ver + 1;
-                    region_epoch.set_conf_ver(conf_version);
-                    assert_eq!(tikv_region.get_region_epoch().get_conf_ver(), conf_version);
-
-                    {
-                        let region = engine_store_server.kvstore.get_mut(&region_id).unwrap();
-                        region.set_applied(header.index, header.term);
-                    }
-                    // We don't handle MergeState and PeerState here
-                },
-                AdminCmdType::CommitMerge => {
-                    {
-                        let tikv_target_region_meta = resp.get_split().get_left();
-
-                        let target_region =
-                            &mut (engine_store_server.kvstore.get_mut(&region_id).unwrap());
-                        let target_region_meta = &mut target_region.region;
-                        let target_version = target_region_meta.get_region_epoch().get_version();
-                        let source_region = req.get_commit_merge().get_source();
-                        let source_version = source_region.get_region_epoch().get_version();
-
-                        let new_version = std::cmp::max(source_version, target_version) + 1;
-                        target_region_meta
-                            .mut_region_epoch()
-                            .set_version(new_version);
-                        assert_eq!(
-                            target_region_meta.get_region_epoch().get_version(),
-                            new_version
-                        );
-
-                        // No need to merge data
-                        let source_at_left = if source_region.get_start_key().is_empty() {
-                            true
-                        } else if target_region_meta.get_start_key().is_empty() {
-                            false
-                        } else {
-                            source_region
-                                .get_end_key()
-                                .cmp(target_region_meta.get_start_key())
-                                == std::cmp::Ordering::Equal
+        let do_handle_admin_raft_cmd =
+            move |region: &mut Box<Region>, engine_store_server: &mut EngineStoreServer| {
+                if region.apply_state.get_applied_index() >= header.index {
+                    return ffi_interfaces::EngineStoreApplyRes::Persist;
+                }
+                match req.get_cmd_type() {
+                    AdminCmdType::ChangePeer | AdminCmdType::ChangePeerV2 => {
+                        let new_region_meta = resp.get_change_peer().get_region();
+                        let old_peer_id = {
+                            let old_region =
+                                engine_store_server.kvstore.get_mut(&region_id).unwrap();
+                            old_region.region = new_region_meta.clone();
+                            region.set_applied(header.index, header.term);
+                            old_region.peer.get_store_id()
                         };
 
-                        if source_at_left {
-                            target_region_meta
-                                .set_start_key(source_region.get_start_key().to_vec());
-                            assert_eq!(
-                                tikv_target_region_meta.get_start_key(),
-                                target_region_meta.get_start_key()
-                            );
+                        let mut do_remove = true;
+                        if old_peer_id != 0 {
+                            for peer in new_region_meta.get_peers().iter() {
+                                if peer.get_store_id() == old_peer_id {
+                                    // Should not remove region
+                                    do_remove = false;
+                                }
+                            }
                         } else {
-                            target_region_meta.set_end_key(source_region.get_end_key().to_vec());
-                            assert_eq!(
-                                tikv_target_region_meta.get_end_key(),
-                                target_region_meta.get_end_key()
+                            // If old_peer_id is 0, seems old_region.peer is not set, just neglect for convenience.
+                            do_remove = false;
+                        }
+                        if do_remove {
+                            let removed = engine_store_server.kvstore.remove(&region_id);
+                            // We need to also remove apply state, thus we need to know peer_id
+                            debug!(
+                                "Remove region {:?} peer_id {} at node {}, for new meta {:?}",
+                                removed.unwrap().region,
+                                old_peer_id,
+                                node_id,
+                                new_region_meta
                             );
                         }
-                        target_region.set_applied(header.index, header.term);
                     }
-                    let to_remove = req.get_commit_merge().get_source().get_id();
-                    engine_store_server
-                        .kvstore
-                        .remove(&to_remove);
-                },
-                AdminCmdType::RollbackMerge => {
-                    let region = engine_store_server.kvstore.get_mut(&region_id).unwrap();
-                    let region_meta = &mut region.region;
-                    let new_version = region_meta.get_region_epoch().get_version() + 1;
+                    AdminCmdType::BatchSplit => {
+                        let regions = resp.get_splits().regions.as_ref();
 
-                    region.set_applied(header.index, header.term);
-                },
-                AdminCmdType::CompactLog => {
-                    // We will modify truncated_state when returns Persist.
-                    region.set_applied(header.index, header.term);
-                },
-                _ => {
-                    region.set_applied(header.index, header.term);
-                },
-            }
-            // do persist or not
-            let res = match req.get_cmd_type() {
-                AdminCmdType::CompactLog => {
-                    fail::fail_point!("on_handle_admin_raft_cmd_no_persist", |_| {
-                        ffi_interfaces::EngineStoreApplyRes::None
-                    });
-                    ffi_interfaces::EngineStoreApplyRes::Persist
-                },
-                _ => {
-                    ffi_interfaces::EngineStoreApplyRes::Persist
-                },
+                        for i in 0..regions.len() {
+                            let region_meta = regions.get(i).unwrap();
+                            if region_meta.id == region_id {
+                                // This is the derived region
+                                debug!(
+                                    "region {} is derived by split at peer {} with meta {:?}",
+                                    region_meta.id, node_id, region_meta
+                                );
+                                assert!(engine_store_server.kvstore.contains_key(&region_meta.id));
+                                engine_store_server
+                                    .kvstore
+                                    .get_mut(&region_meta.id)
+                                    .unwrap()
+                                    .region = region_meta.clone();
+                            } else {
+                                // Should split data into new region
+                                debug!(
+                                    "new region {} generated by split at peer {} with meta {:?}",
+                                    region_meta.id, node_id, region_meta
+                                );
+                                let mut new_region =
+                                    make_new_region(Some(region_meta.clone()), Some(node_id));
+
+                                // No need to split data because all KV are stored in the same RocksDB.
+                                // TODO But we still need to clean all in-memory data.
+                                // We can't assert `region_meta.id` is brand new here
+                                engine_store_server
+                                    .kvstore
+                                    .insert(region_meta.id, Box::new(new_region));
+                            }
+                        }
+                    }
+                    AdminCmdType::PrepareMerge => {
+                        let tikv_region = resp.get_split().get_left();
+
+                        let target = req.prepare_merge.as_ref().unwrap().target.as_ref();
+                        let region_meta = &mut (engine_store_server
+                            .kvstore
+                            .get_mut(&region_id)
+                            .unwrap()
+                            .region);
+                        let region_epoch = region_meta.region_epoch.as_mut().unwrap();
+
+                        let new_version = region_epoch.version + 1;
+                        region_epoch.set_version(new_version);
+                        assert_eq!(tikv_region.get_region_epoch().get_version(), new_version);
+
+                        let conf_version = region_epoch.conf_ver + 1;
+                        region_epoch.set_conf_ver(conf_version);
+                        assert_eq!(tikv_region.get_region_epoch().get_conf_ver(), conf_version);
+
+                        {
+                            let region = engine_store_server.kvstore.get_mut(&region_id).unwrap();
+                            region.set_applied(header.index, header.term);
+                        }
+                        // We don't handle MergeState and PeerState here
+                    }
+                    AdminCmdType::CommitMerge => {
+                        {
+                            let tikv_target_region_meta = resp.get_split().get_left();
+
+                            let target_region =
+                                &mut (engine_store_server.kvstore.get_mut(&region_id).unwrap());
+                            let target_region_meta = &mut target_region.region;
+                            let target_version =
+                                target_region_meta.get_region_epoch().get_version();
+                            let source_region = req.get_commit_merge().get_source();
+                            let source_version = source_region.get_region_epoch().get_version();
+
+                            let new_version = std::cmp::max(source_version, target_version) + 1;
+                            target_region_meta
+                                .mut_region_epoch()
+                                .set_version(new_version);
+                            assert_eq!(
+                                target_region_meta.get_region_epoch().get_version(),
+                                new_version
+                            );
+
+                            // No need to merge data
+                            let source_at_left = if source_region.get_start_key().is_empty() {
+                                true
+                            } else if target_region_meta.get_start_key().is_empty() {
+                                false
+                            } else {
+                                source_region
+                                    .get_end_key()
+                                    .cmp(target_region_meta.get_start_key())
+                                    == std::cmp::Ordering::Equal
+                            };
+
+                            if source_at_left {
+                                target_region_meta
+                                    .set_start_key(source_region.get_start_key().to_vec());
+                                assert_eq!(
+                                    tikv_target_region_meta.get_start_key(),
+                                    target_region_meta.get_start_key()
+                                );
+                            } else {
+                                target_region_meta
+                                    .set_end_key(source_region.get_end_key().to_vec());
+                                assert_eq!(
+                                    tikv_target_region_meta.get_end_key(),
+                                    target_region_meta.get_end_key()
+                                );
+                            }
+                            target_region.set_applied(header.index, header.term);
+                        }
+                        let to_remove = req.get_commit_merge().get_source().get_id();
+                        engine_store_server.kvstore.remove(&to_remove);
+                    }
+                    AdminCmdType::RollbackMerge => {
+                        let region = engine_store_server.kvstore.get_mut(&region_id).unwrap();
+                        let region_meta = &mut region.region;
+                        let new_version = region_meta.get_region_epoch().get_version() + 1;
+
+                        region.set_applied(header.index, header.term);
+                    }
+                    AdminCmdType::CompactLog => {
+                        // We will modify truncated_state when returns Persist.
+                        region.set_applied(header.index, header.term);
+                    }
+                    _ => {
+                        region.set_applied(header.index, header.term);
+                    }
+                }
+                // do persist or not
+                let res = match req.get_cmd_type() {
+                    AdminCmdType::CompactLog => {
+                        fail::fail_point!("on_handle_admin_raft_cmd_no_persist", |_| {
+                            ffi_interfaces::EngineStoreApplyRes::None
+                        });
+                        ffi_interfaces::EngineStoreApplyRes::Persist
+                    }
+                    _ => ffi_interfaces::EngineStoreApplyRes::Persist,
+                };
+                if req.get_cmd_type() == AdminCmdType::CompactLog
+                    && res == ffi_interfaces::EngineStoreApplyRes::Persist
+                {
+                    let region = engine_store_server.kvstore.get_mut(&region_id).unwrap();
+                    let state = &mut region.apply_state;
+                    let compact_index = req.get_compact_log().get_compact_index();
+                    let compact_term = req.get_compact_log().get_compact_term();
+                    state.mut_truncated_state().set_index(compact_index);
+                    state.mut_truncated_state().set_term(compact_term);
+                }
+                res
             };
-            if req.get_cmd_type() == AdminCmdType::CompactLog && res == ffi_interfaces::EngineStoreApplyRes::Persist {
-                let region = engine_store_server.kvstore.get_mut(&region_id).unwrap();
-                let state = &mut region.apply_state;
-                let compact_index = req.get_compact_log().get_compact_index();
-                let compact_term = req.get_compact_log().get_compact_term();
-                state.mut_truncated_state().set_index(compact_index);
-                state.mut_truncated_state().set_term(compact_term);
-            }
-            res
-        };
 
         let res = match (*self.engine_store_server).kvstore.entry(region_id) {
             std::collections::hash_map::Entry::Occupied(mut o) => {
@@ -413,16 +424,14 @@ impl EngineStoreServerWrap {
                 // so it is normal if we find no region.
                 warn!("region {} not found, create for {}", region_id, node_id);
                 let new_region = v.insert(Default::default());
-                assert!( (*self.engine_store_server).kvstore.contains_key(&region_id));
+                assert!((*self.engine_store_server).kvstore.contains_key(&region_id));
                 do_handle_admin_raft_cmd(new_region, &mut (*self.engine_store_server))
             }
         };
 
         // We must have this region now.
         let region = match (*self.engine_store_server).kvstore.get_mut(&region_id) {
-            Some(r) => {
-                r
-            },
+            Some(r) => r,
             None => {
                 panic!("still can't find region {} for {}", region_id, node_id);
             }
@@ -598,7 +607,11 @@ impl Into<ffi_interfaces::RawCppPtrType> for RawCppPtrTypeImpl {
     }
 }
 
-extern "C" fn ffi_can_flush_data(arg1: *mut ffi_interfaces::EngineStoreServerWrap, region_id: u64, flush_if_possible: u8) -> u8 {
+extern "C" fn ffi_can_flush_data(
+    arg1: *mut ffi_interfaces::EngineStoreServerWrap,
+    region_id: u64,
+    flush_if_possible: u8,
+) -> u8 {
     fail::fail_point!("can_flush_data", |e| e.unwrap().parse::<u8>().unwrap());
     true as u8
 }
@@ -817,7 +830,10 @@ unsafe extern "C" fn ffi_pre_handle_snapshot(
 
     let mut region = Box::new(Region::new(req));
 
-    debug!("pre handle snaps with len {} peer_id {} region {:?}", snaps.len, peer_id, region.region);
+    debug!(
+        "pre handle snaps with len {} peer_id {} region {:?}",
+        snaps.len, peer_id, region.region
+    );
     for i in 0..snaps.len {
         let mut snapshot = snaps.views.add(i as usize);
         let mut sst_reader =
@@ -830,7 +846,12 @@ unsafe extern "C" fn ffi_pre_handle_snapshot(
             let cf = (*snapshot).type_;
             let cf_index = cf as u8;
             let cf_name = cf_to_name(cf.into());
-            write_kv_in_mem(&mut region, cf_index as usize, key.to_slice(), value.to_slice());
+            write_kv_in_mem(
+                &mut region,
+                cf_index as usize,
+                key.to_slice(),
+                value.to_slice(),
+            );
             sst_reader.next();
         }
     }
@@ -877,7 +898,10 @@ unsafe extern "C" fn ffi_apply_pre_handled_snapshot(
         .get_mut(&req_id)
         .unwrap();
 
-    debug!("apply snaps peer_id {} region {:?}", node_id, &region.region);
+    debug!(
+        "apply snaps peer_id {} region {:?}",
+        node_id, &region.region
+    );
 
     write_to_db_data(&mut (*store.engine_store_server), region);
 }

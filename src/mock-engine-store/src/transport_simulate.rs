@@ -21,10 +21,10 @@ use raftstore::store::{
 };
 use raftstore::Result as RaftStoreResult;
 use raftstore::{DiscardReason, Error, Result};
+use test_raftstore::FilterFactory;
 use tikv_util::error;
 use tikv_util::time::ThreadReadId;
 use tikv_util::{Either, HandyRwLock};
-use test_raftstore::FilterFactory;
 
 pub fn check_messages(msgs: &[RaftMessage]) -> Result<()> {
     if msgs.is_empty() {

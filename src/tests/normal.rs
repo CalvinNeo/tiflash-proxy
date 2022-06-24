@@ -4,7 +4,7 @@ use engine_store_ffi::{KVGetStatus, RaftStoreProxyFFI};
 use mock_engine_store::node::NodeCluster;
 use mock_engine_store::server::ServerCluster;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock, mpsc};
+use std::sync::{mpsc, Arc, RwLock};
 use test_raftstore::{must_get_equal, must_get_none, new_peer, TestPdClient};
 
 extern crate rocksdb;
@@ -12,33 +12,35 @@ use crate::normal::rocksdb::Writable;
 use ::rocksdb::DB;
 use engine_store_ffi::config::{ensure_no_common_unrecognized_keys, ProxyConfig};
 use engine_tiflash::*;
-use engine_traits::{Iterable, WriteBatchExt, Mutable, WriteBatch};
 use engine_traits::Iterator;
 use engine_traits::MiscExt;
 use engine_traits::Peekable;
 use engine_traits::SeekKey;
 use engine_traits::{Error, Result};
 use engine_traits::{ExternalSstFileInfo, SstExt, SstReader, SstWriter, SstWriterBuilder};
+use engine_traits::{Iterable, Mutable, WriteBatch, WriteBatchExt};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
 use kvproto::raft_serverpb::{RaftApplyState, RegionLocalState, StoreIdent};
-use pd_client::PdClient;
-use sst_importer::SSTImporter;
-use std::io::{self, Read, Write};
-use std::path::Path;
-use std::sync::Once;
-use tikv::config::TiKvConfig;
-use tikv_util::config::{LogFormat, ReadableDuration, ReadableSize};
-use tikv_util::HandyRwLock;
-use test_raftstore::Simulator;
-use mock_engine_store::transport_simulate::{CloneFilterFactory, RegionPacketFilter, CollectSnapshotFilter};
-use tikv_util::time::Duration;
-use raft::eraftpb::MessageType;
 use mock_engine_store::transport_simulate::Direction;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use kvproto::raft_cmdpb::{AdminRequest, AdminCmdType};
+use mock_engine_store::transport_simulate::{
+    CloneFilterFactory, CollectSnapshotFilter, RegionPacketFilter,
+};
+use pd_client::PdClient;
+use raft::eraftpb::MessageType;
 use raftstore::coprocessor::{ConsistencyCheckMethod, Coprocessor};
 use raftstore::store::util::find_peer;
+use sst_importer::SSTImporter;
+use std::io::{self, Read, Write};
 use std::ops::{Deref, DerefMut};
+use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Once;
+use test_raftstore::Simulator;
+use tikv::config::TiKvConfig;
+use tikv_util::config::{LogFormat, ReadableDuration, ReadableSize};
+use tikv_util::time::Duration;
+use tikv_util::HandyRwLock;
 
 fn get_region_local_state(engine: &engine_rocks::RocksEngine, region_id: u64) -> RegionLocalState {
     let region_state_key = keys::region_state_key(region_id);
@@ -61,7 +63,8 @@ fn get_apply_state(engine: &engine_rocks::RocksEngine, region_id: u64) -> RaftAp
 pub fn new_compute_hash_request() -> AdminRequest {
     let mut req = AdminRequest::default();
     req.set_cmd_type(AdminCmdType::ComputeHash);
-    req.mut_compute_hash().set_context(vec![ConsistencyCheckMethod::Raw as u8]);
+    req.mut_compute_hash()
+        .set_context(vec![ConsistencyCheckMethod::Raw as u8]);
     req
 }
 
@@ -81,18 +84,17 @@ struct States {
     ident: StoreIdent,
 }
 
-fn collect_all_states(cluster: &mock_engine_store::mock_cluster::Cluster<NodeCluster>,
-                      region_id: u64) -> HashMap<u64, States> {
+fn collect_all_states(
+    cluster: &mock_engine_store::mock_cluster::Cluster<NodeCluster>,
+    region_id: u64,
+) -> HashMap<u64, States> {
     let mut prev_state: HashMap<u64, States> = HashMap::default();
     for id in cluster.raw.engines.keys() {
         let db = cluster.get_engine(*id);
         let engine = engine_rocks::RocksEngine::from_db(db);
 
-
-        let mut lock = cluster
-            .ffi_helper_set.lock().unwrap();
-        let server = &lock.get_mut().get(id).unwrap()
-            .engine_store_server;
+        let mut lock = cluster.ffi_helper_set.lock().unwrap();
+        let server = &lock.get_mut().get(id).unwrap().engine_store_server;
 
         let region = server.kvstore.get(&region_id).unwrap();
 
@@ -101,30 +103,53 @@ fn collect_all_states(cluster: &mock_engine_store::mock_cluster::Cluster<NodeClu
             _ => unreachable!(),
         };
 
-        prev_state.insert(*id, States {
-            in_memory_apply_state: region.apply_state.clone(),
-            in_memory_applied_term: region.applied_term,
-            in_disk_apply_state: get_apply_state(&engine, region_id),
-            in_disk_region_state: get_region_local_state(&engine, region_id),
-            ident: ident
-        });
+        prev_state.insert(
+            *id,
+            States {
+                in_memory_apply_state: region.apply_state.clone(),
+                in_memory_applied_term: region.applied_term,
+                in_disk_apply_state: get_apply_state(&engine, region_id),
+                in_disk_region_state: get_region_local_state(&engine, region_id),
+                ident: ident,
+            },
+        );
     }
     prev_state
 }
 
-pub fn new_mock_cluster(id: u64, count: usize) -> (mock_engine_store::mock_cluster::Cluster<NodeCluster>, Arc<TestPdClient>) {
+pub fn new_mock_cluster(
+    id: u64,
+    count: usize,
+) -> (
+    mock_engine_store::mock_cluster::Cluster<NodeCluster>,
+    Arc<TestPdClient>,
+) {
     let pd_client = Arc::new(TestPdClient::new(0, false));
     let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
-    let cluster = mock_engine_store::mock_cluster::Cluster::new(id, count, sim, pd_client.clone(), ProxyConfig::default());
+    let cluster = mock_engine_store::mock_cluster::Cluster::new(
+        id,
+        count,
+        sim,
+        pd_client.clone(),
+        ProxyConfig::default(),
+    );
 
     (cluster, pd_client)
 }
 
-pub fn must_get_mem(engine_store_server: &Box<mock_engine_store::EngineStoreServer>, region_id: u64, key: &[u8], value: Option<&[u8]>) {
+pub fn must_get_mem(
+    engine_store_server: &Box<mock_engine_store::EngineStoreServer>,
+    region_id: u64,
+    key: &[u8],
+    value: Option<&[u8]>,
+) {
     let mut last_res: Option<&Vec<u8>> = None;
     for _ in 1..300 {
-        let res = engine_store_server
-            .get_mem(region_id, mock_engine_store::ffi_interfaces::ColumnFamilyType::Default, &key.to_vec());
+        let res = engine_store_server.get_mem(
+            region_id,
+            mock_engine_store::ffi_interfaces::ColumnFamilyType::Default,
+            &key.to_vec(),
+        );
 
         if let (Some(value), Some(last_res)) = (value, res) {
             assert_eq!(value, &last_res[..]);
@@ -144,15 +169,19 @@ pub fn must_get_mem(engine_store_server: &Box<mock_engine_store::EngineStoreServ
     )
 }
 
-pub fn check_key(cluster: &mock_engine_store::mock_cluster::Cluster<NodeCluster>,
-                 k: &[u8], v: &[u8], in_mem: Option<bool>, in_disk: Option<bool>, engines: Option<Vec<u64>>) {
+pub fn check_key(
+    cluster: &mock_engine_store::mock_cluster::Cluster<NodeCluster>,
+    k: &[u8],
+    v: &[u8],
+    in_mem: Option<bool>,
+    in_disk: Option<bool>,
+    engines: Option<Vec<u64>>,
+) {
     let region_id = cluster.get_region(k).get_id();
     let engine_keys = {
         match engines {
             Some(e) => e.to_vec(),
-            None => {
-                cluster.raw.engines.keys().map(|k| *k).collect::<Vec<u64>>()
-            },
+            None => cluster.raw.engines.keys().map(|k| *k).collect::<Vec<u64>>(),
         }
     };
     for id in engine_keys {
@@ -165,29 +194,29 @@ pub fn check_key(cluster: &mock_engine_store::mock_cluster::Cluster<NodeCluster>
                 } else {
                     must_get_none(engine, k);
                 }
-            },
-            None => ()
+            }
+            None => (),
         };
         match in_mem {
             Some(b) => {
-                let mut lock = cluster
-                    .ffi_helper_set.lock().unwrap();
-                let server = &lock.get_mut().get(&id).unwrap()
-                    .engine_store_server;
+                let mut lock = cluster.ffi_helper_set.lock().unwrap();
+                let server = &lock.get_mut().get(&id).unwrap().engine_store_server;
                 if b {
                     must_get_mem(server, region_id, k, Some(v));
                 } else {
                     must_get_mem(server, region_id, k, None);
                 }
-            },
-            None => ()
+            }
+            None => (),
         };
     }
 }
 
-fn must_assert_state(cluster: &mock_engine_store::mock_cluster::Cluster<NodeCluster>,
-                     region_id: u64, prev_state: HashMap<u64, States>) {
-
+fn must_assert_state(
+    cluster: &mock_engine_store::mock_cluster::Cluster<NodeCluster>,
+    region_id: u64,
+    prev_state: HashMap<u64, States>,
+) {
 }
 
 #[test]
@@ -321,7 +350,8 @@ fn test_interaction() {
             let old = prev_states.get(i).unwrap();
             let new = new_states.get(i).unwrap();
             if old.in_memory_apply_state == new.in_memory_apply_state
-                && old.in_memory_applied_term == new.in_memory_applied_term {
+                && old.in_memory_applied_term == new.in_memory_applied_term
+            {
                 ok = false;
                 break;
             }
@@ -401,7 +431,12 @@ fn test_leadership_change_impl(filter: bool) {
     let region = cluster.get_region(b"k1");
     let region_id = region.get_id();
 
-    let eng_ids = cluster.raw.engines.iter().map(|e| e.0.to_owned()).collect::<Vec<_>>();
+    let eng_ids = cluster
+        .raw
+        .engines
+        .iter()
+        .map(|e| e.0.to_owned())
+        .collect::<Vec<_>>();
     let peer_1 = find_peer(&region, eng_ids[0]).cloned().unwrap();
     let peer_2 = find_peer(&region, eng_ids[1]).cloned().unwrap();
     cluster.must_transfer_leader(region.get_id(), peer_1.clone());
@@ -474,7 +509,14 @@ fn test_kv_write() {
     for i in 0..10 {
         let k = format!("k{}", i);
         let v = format!("v{}", i);
-        check_key(&cluster, k.as_bytes(), v.as_bytes(), Some(false), Some(false), None);
+        check_key(
+            &cluster,
+            k.as_bytes(),
+            v.as_bytes(),
+            Some(false),
+            Some(false),
+            None,
+        );
     }
 
     // We can read initial raft state, since we don't persist meta either.
@@ -493,19 +535,29 @@ fn test_kv_write() {
     for i in 10..20 {
         let k = format!("k{}", i);
         let v = format!("v{}", i);
-        check_key(&cluster, k.as_bytes(), v.as_bytes(), Some(true), Some(false), None);
+        check_key(
+            &cluster,
+            k.as_bytes(),
+            v.as_bytes(),
+            Some(true),
+            Some(false),
+            None,
+        );
     }
 
     let new_states = collect_all_states(&cluster, r1);
     for id in cluster.raw.engines.keys() {
-        assert_ne!(&prev_states.get(id).unwrap().in_memory_apply_state,
-                   &new_states.get(id).unwrap().in_memory_apply_state);
-        assert_eq!(&prev_states.get(id).unwrap().in_disk_apply_state,
-                   &new_states.get(id).unwrap().in_disk_apply_state);
+        assert_ne!(
+            &prev_states.get(id).unwrap().in_memory_apply_state,
+            &new_states.get(id).unwrap().in_memory_apply_state
+        );
+        assert_eq!(
+            &prev_states.get(id).unwrap().in_disk_apply_state,
+            &new_states.get(id).unwrap().in_disk_apply_state
+        );
     }
 
     fail::remove("on_handle_admin_raft_cmd_no_persist");
-
 
     let prev_states = collect_all_states(&cluster, r1);
     // Write more after we force persist when compact log.
@@ -527,7 +579,8 @@ fn test_kv_write() {
     let region_r = cluster.get_region("k1".as_bytes());
     let region_id = region_r.get_id();
     let compact_log = test_raftstore::new_compact_log_request(100, 10);
-    let req = test_raftstore::new_admin_request(region_id, region_r.get_region_epoch(), compact_log);
+    let req =
+        test_raftstore::new_admin_request(region_id, region_r.get_region_epoch(), compact_log);
     let res = cluster
         .raw
         .call_command_on_leader(req, Duration::from_secs(3))
@@ -537,17 +590,28 @@ fn test_kv_write() {
     for i in 11..30 {
         let k = format!("k{}", i);
         let v = format!("v{}", i);
-        check_key(&cluster, k.as_bytes(), v.as_bytes(), Some(true), Some(true), None);
+        check_key(
+            &cluster,
+            k.as_bytes(),
+            v.as_bytes(),
+            Some(true),
+            Some(true),
+            None,
+        );
     }
 
     let new_states = collect_all_states(&cluster, r1);
 
     // apply_state is changed in memory, and persisted.
     for id in cluster.raw.engines.keys() {
-        assert_ne!(&prev_states.get(id).unwrap().in_memory_apply_state,
-                   &new_states.get(id).unwrap().in_memory_apply_state);
-        assert_ne!(&prev_states.get(id).unwrap().in_disk_apply_state,
-                   &new_states.get(id).unwrap().in_disk_apply_state);
+        assert_ne!(
+            &prev_states.get(id).unwrap().in_memory_apply_state,
+            &new_states.get(id).unwrap().in_memory_apply_state
+        );
+        assert_ne!(
+            &prev_states.get(id).unwrap().in_disk_apply_state,
+            &new_states.get(id).unwrap().in_disk_apply_state
+        );
     }
 
     fail::remove("on_handle_admin_raft_cmd_no_persist");
@@ -564,14 +628,14 @@ fn test_consistency_check() {
     let region = cluster.get_region("k".as_bytes());
     let region_id = region.get_id();
 
-    let r = new_verify_hash_request(vec![1,2,3,4,5,6], 1000);
+    let r = new_verify_hash_request(vec![1, 2, 3, 4, 5, 6], 1000);
     let req = test_raftstore::new_admin_request(region_id, region.get_region_epoch(), r);
     let res = cluster
         .raw
         .call_command_on_leader(req, Duration::from_secs(3))
         .unwrap();
 
-    let r = new_verify_hash_request(vec![7,8,9,0], 1000);
+    let r = new_verify_hash_request(vec![7, 8, 9, 0], 1000);
     let req = test_raftstore::new_admin_request(region_id, region.get_region_epoch(), r);
     let res = cluster
         .raw
@@ -602,9 +666,16 @@ fn test_compact_log() {
 
     let prev_state = collect_all_states(&cluster, region_id);
 
-    let (compact_index, compact_term) = prev_state.iter()
-        .map(|(_, s)| (s.in_memory_apply_state.get_applied_index(), s.in_memory_applied_term))
-        .min_by(|l, r| l.0.cmp(&r.0)).unwrap();
+    let (compact_index, compact_term) = prev_state
+        .iter()
+        .map(|(_, s)| {
+            (
+                s.in_memory_apply_state.get_applied_index(),
+                s.in_memory_applied_term,
+            )
+        })
+        .min_by(|l, r| l.0.cmp(&r.0))
+        .unwrap();
     let compact_log = test_raftstore::new_compact_log_request(compact_index, compact_term);
     let req = test_raftstore::new_admin_request(region_id, region.get_region_epoch(), compact_log);
     let res = cluster
@@ -619,16 +690,29 @@ fn test_compact_log() {
     for i in prev_state.keys() {
         let old = prev_state.get(i).unwrap();
         let new = new_state.get(i).unwrap();
-        assert_eq!(old.in_memory_apply_state.get_truncated_state(), new.in_memory_apply_state.get_truncated_state());
-        assert_eq!(old.in_disk_apply_state.get_truncated_state(), new.in_disk_apply_state.get_truncated_state());
+        assert_eq!(
+            old.in_memory_apply_state.get_truncated_state(),
+            new.in_memory_apply_state.get_truncated_state()
+        );
+        assert_eq!(
+            old.in_disk_apply_state.get_truncated_state(),
+            new.in_disk_apply_state.get_truncated_state()
+        );
     }
 
     fail::remove("on_empty_cmd_normal");
     fail::remove("can_flush_data");
 
-    let (compact_index, compact_term) = new_state.iter()
-        .map(|(_, s)| (s.in_memory_apply_state.get_applied_index(), s.in_memory_applied_term))
-        .min_by(|l, r| l.0.cmp(&r.0)).unwrap();
+    let (compact_index, compact_term) = new_state
+        .iter()
+        .map(|(_, s)| {
+            (
+                s.in_memory_apply_state.get_applied_index(),
+                s.in_memory_applied_term,
+            )
+        })
+        .min_by(|l, r| l.0.cmp(&r.0))
+        .unwrap();
     let compact_log = test_raftstore::new_compact_log_request(compact_index, compact_term);
     let req = test_raftstore::new_admin_request(region_id, region.get_region_epoch(), compact_log);
     let res = cluster
@@ -645,7 +729,10 @@ fn test_compact_log() {
     for i in prev_state.keys() {
         let old = prev_state.get(i).unwrap();
         let new = new_state.get(i).unwrap();
-        assert_ne!(old.in_memory_apply_state.get_truncated_state(), new.in_memory_apply_state.get_truncated_state());
+        assert_ne!(
+            old.in_memory_apply_state.get_truncated_state(),
+            new.in_memory_apply_state.get_truncated_state()
+        );
     }
 
     cluster.shutdown();
@@ -681,10 +768,8 @@ fn test_split_merge() {
     assert_eq!(r1.get_id(), r3_new.get_id());
 
     for id in cluster.raw.engines.keys() {
-        let mut lock = cluster
-            .ffi_helper_set.lock().unwrap();
-        let server = &lock.get_mut().get(id).unwrap()
-            .engine_store_server;
+        let mut lock = cluster.ffi_helper_set.lock().unwrap();
+        let server = &lock.get_mut().get(id).unwrap().engine_store_server;
         if !server.kvstore.contains_key(&r1_new.get_id()) {
             panic!("node {} has no region {}", id, r1_new.get_id())
         }
@@ -706,10 +791,8 @@ fn test_split_merge() {
     let r3_new2 = cluster.get_region(b"k3");
 
     for id in cluster.raw.engines.keys() {
-        let mut lock = cluster
-            .ffi_helper_set.lock().unwrap();
-        let server = &lock.get_mut().get(id).unwrap()
-            .engine_store_server;
+        let mut lock = cluster.ffi_helper_set.lock().unwrap();
+        let server = &lock.get_mut().get(id).unwrap().engine_store_server;
 
         // The left region is removed
         if server.kvstore.contains_key(&r1_new.get_id()) {
@@ -719,7 +802,10 @@ fn test_split_merge() {
             panic!("node {} has no region {}", id, r3_new.get_id())
         }
         // Region meta must equal
-        assert_eq!(server.kvstore.get(&r3_new2.get_id()).unwrap().region, r3_new2);
+        assert_eq!(
+            server.kvstore.get(&r3_new2.get_id()).unwrap().region,
+            r3_new2
+        );
 
         // Can get from disk
         check_key(&cluster, b"k1", b"v1", None, Some(true), None);
@@ -839,7 +925,12 @@ fn test_huge_snapshot() {
     }
     let first_key: &[u8] = b"000";
 
-    let eng_ids = cluster.raw.engines.iter().map(|e| e.0.to_owned()).collect::<Vec<_>>();
+    let eng_ids = cluster
+        .raw
+        .engines
+        .iter()
+        .map(|e| e.0.to_owned())
+        .collect::<Vec<_>>();
     tikv_util::info!("engine_2 is {}", eng_ids[1]);
     let engine_2 = cluster.get_engine(eng_ids[1]);
     must_get_none(&engine_2, first_key);
@@ -849,7 +940,14 @@ fn test_huge_snapshot() {
     let (key, value) = (b"k2", b"v2");
     cluster.must_put(key, value);
     // we can get in memory, since snapshot is pre handled, though it is not persisted
-    check_key(&cluster, key, value, Some(true), None, Some(vec![eng_ids[1]]));
+    check_key(
+        &cluster,
+        key,
+        value,
+        Some(true),
+        None,
+        Some(vec![eng_ids[1]]),
+    );
     // now snapshot must be applied on peer engine_2
     must_get_equal(&engine_2, first_key, first_value.as_slice());
 
@@ -921,7 +1019,12 @@ fn test_concurrent_snapshot() {
     cluster.shutdown();
 }
 
-fn new_split_region_cluster(count: u64) -> (mock_engine_store::mock_cluster::Cluster<NodeCluster>, Arc<TestPdClient>) {
+fn new_split_region_cluster(
+    count: u64,
+) -> (
+    mock_engine_store::mock_cluster::Cluster<NodeCluster>,
+    Arc<TestPdClient>,
+) {
     let (mut cluster, pd_client) = new_mock_cluster(0, 3);
     // Disable raft log gc in this test case.
     cluster.raw.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
@@ -948,7 +1051,6 @@ fn new_split_region_cluster(count: u64) -> (mock_engine_store::mock_cluster::Clu
     (cluster, pd_client)
 }
 
-
 #[test]
 fn test_many_concurrent_snapshot() {
     let c = 4;
@@ -963,7 +1065,14 @@ fn test_many_concurrent_snapshot() {
     for i in 0..c {
         let k = format!("k{:0>4}", 2 * i + 1);
         let v = format!("v{}", 2 * i + 1);
-        check_key(&cluster, k.as_bytes(), v.as_bytes(), Some(true), Some(true), Some(vec![2]));
+        check_key(
+            &cluster,
+            k.as_bytes(),
+            v.as_bytes(),
+            Some(true),
+            Some(true),
+            Some(vec![2]),
+        );
     }
 }
 
@@ -993,7 +1102,14 @@ fn test_basic_concurrent_snapshot() {
     std::thread::sleep(std::time::Duration::from_millis(500));
     // Now, k1 and k3 are not handled, since pre-handle process is not finished.
 
-    let pending_count = cluster.raw.engines.get(&2).unwrap().kv.pending_applies_count.clone();
+    let pending_count = cluster
+        .raw
+        .engines
+        .get(&2)
+        .unwrap()
+        .kv
+        .pending_applies_count
+        .clone();
     assert_eq!(pending_count.load(Ordering::Relaxed), 2);
     std::thread::sleep(std::time::Duration::from_millis(1000));
     // Now, k1 and k3 are handled.
@@ -1014,22 +1130,47 @@ fn test_prehandle_fail() {
     let r1 = cluster.run_conf_change();
     cluster.must_put(b"k1", b"v1");
 
-    let eng_ids = cluster.raw.engines.iter().map(|e| e.0.to_owned()).collect::<Vec<_>>();
+    let eng_ids = cluster
+        .raw
+        .engines
+        .iter()
+        .map(|e| e.0.to_owned())
+        .collect::<Vec<_>>();
     fail::cfg("before_actually_pre_handle", "return");
     pd_client.must_add_peer(r1, new_peer(eng_ids[1], eng_ids[1]));
-    check_key(&cluster, b"k1", b"v1", Some(true), Some(true), Some(vec![eng_ids[1]]));
+    check_key(
+        &cluster,
+        b"k1",
+        b"v1",
+        Some(true),
+        Some(true),
+        Some(vec![eng_ids[1]]),
+    );
     fail::remove("before_actually_pre_handle");
 
     // We can apply snapshot, even if per_handle_snapshot is not called.
     fail::cfg("on_ob_pre_handle_snapshot", "return");
-    check_key(&cluster, b"k1", b"v1", Some(false), Some(false), Some(vec![eng_ids[2]]));
+    check_key(
+        &cluster,
+        b"k1",
+        b"v1",
+        Some(false),
+        Some(false),
+        Some(vec![eng_ids[2]]),
+    );
     pd_client.must_add_peer(r1, new_peer(eng_ids[2], eng_ids[2]));
-    check_key(&cluster, b"k1", b"v1", Some(true), Some(true), Some(vec![eng_ids[2]]));
+    check_key(
+        &cluster,
+        b"k1",
+        b"v1",
+        Some(true),
+        Some(true),
+        Some(vec![eng_ids[2]]),
+    );
     fail::remove("on_ob_pre_handle_snapshot");
 
     cluster.shutdown();
 }
-
 
 #[test]
 fn test_handle_destroy() {
@@ -1043,8 +1184,12 @@ fn test_handle_destroy() {
 
     cluster.run();
     cluster.must_put(b"k1", b"v1");
-    let eng_ids = cluster.raw.engines.iter().map(|e| e.0.to_owned()).collect::<Vec<_>>();
-
+    let eng_ids = cluster
+        .raw
+        .engines
+        .iter()
+        .map(|e| e.0.to_owned())
+        .collect::<Vec<_>>();
 
     let region = cluster.get_region(b"k1");
     let region_id = region.get_id();
@@ -1053,23 +1198,26 @@ fn test_handle_destroy() {
     cluster.must_transfer_leader(region_id, peer_1);
 
     {
-        let mut lock = cluster
-            .ffi_helper_set.lock().unwrap();
-        let server = &lock.get_mut().get(&eng_ids[1]).unwrap()
-            .engine_store_server;
+        let mut lock = cluster.ffi_helper_set.lock().unwrap();
+        let server = &lock.get_mut().get(&eng_ids[1]).unwrap().engine_store_server;
 
         assert!(server.kvstore.contains_key(&region_id));
     }
 
     pd_client.must_remove_peer(region_id, peer_2);
 
-    check_key(&cluster, b"k1", b"k2", Some(false), None, Some(vec![eng_ids[1]]));
+    check_key(
+        &cluster,
+        b"k1",
+        b"k2",
+        Some(false),
+        None,
+        Some(vec![eng_ids[1]]),
+    );
 
     {
-        let mut lock = cluster
-            .ffi_helper_set.lock().unwrap();
-        let server = &lock.get_mut().get(&eng_ids[1]).unwrap()
-            .engine_store_server;
+        let mut lock = cluster.ffi_helper_set.lock().unwrap();
+        let server = &lock.get_mut().get(&eng_ids[1]).unwrap().engine_store_server;
 
         assert!(!server.kvstore.contains_key(&region_id));
     }
