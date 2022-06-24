@@ -35,7 +35,10 @@ use std::borrow::BorrowMut;
 use std::cell::RefCell;
 use tempfile::TempDir;
 use engine_store_ffi::config::ProxyConfig;
-
+use engine_rocks::raw::DB;
+use raftstore::{Error, Result};
+use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
+use kvproto::metapb;
 // mock cluster
 
 pub struct FFIHelperSet {
@@ -298,6 +301,38 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
                 .insert(node_id, ffi_helper_set);
         }
         Ok(())
+    }
+
+    pub fn shutdown(&mut self) {
+        self.raw.shutdown();
+    }
+
+    pub fn must_put(&mut self, key: &[u8], value: &[u8]) {
+        self.raw.must_put(key, value);
+    }
+
+    pub fn get_region(&self, key: &[u8]) -> metapb::Region {
+        self.raw.get_region(key)
+    }
+
+    pub fn get_engine(&self, node_id: u64) -> Arc<DB> {
+        self.raw.get_engine(node_id)
+    }
+
+    pub fn must_transfer_leader(&mut self, region_id: u64, leader: metapb::Peer) {
+        self.raw.must_transfer_leader(region_id, leader)
+    }
+
+    pub fn call_command_on_leader(
+        &mut self,
+        mut request: RaftCmdRequest,
+        timeout: Duration,
+    ) -> Result<RaftCmdResponse> {
+        self.raw.call_command_on_leader(request, timeout)
+    }
+
+    pub fn must_split(&mut self, region: &metapb::Region, split_key: &[u8]) {
+        self.raw.must_split(region, split_key)
     }
 }
 
