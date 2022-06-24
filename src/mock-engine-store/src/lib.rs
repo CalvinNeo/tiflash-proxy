@@ -394,7 +394,9 @@ impl EngineStoreServerWrap {
                 // do persist or not
                 let res = match req.get_cmd_type() {
                     AdminCmdType::CompactLog => {
-                        fail::fail_point!("on_handle_admin_raft_cmd_no_persist", |_| {
+                        // If TiFlash can't handle Persist, if should return false when can_flush_data.
+                        // This is only for test.
+                        fail::fail_point!("no_persist_compact_log", |_| {
                             ffi_interfaces::EngineStoreApplyRes::None
                         });
                         ffi_interfaces::EngineStoreApplyRes::Persist

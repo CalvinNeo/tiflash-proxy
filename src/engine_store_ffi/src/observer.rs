@@ -317,6 +317,9 @@ impl QueryObserver for TiFlashObserver {
                 EngineStoreApplyRes::NotFound => false,
             }
         };
+        fail::fail_point!("on_post_exec_normal_end", |e| {
+            e.unwrap().parse::<bool>().unwrap()
+        });
         persist
     }
 }

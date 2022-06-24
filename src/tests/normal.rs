@@ -43,6 +43,7 @@ use tikv_util::config::{LogFormat, ReadableDuration, ReadableSize};
 use tikv_util::time::Duration;
 use tikv_util::HandyRwLock;
 
+// TODO Need refactor if moved to raft-engine
 fn get_region_local_state(engine: &engine_rocks::RocksEngine, region_id: u64) -> RegionLocalState {
     let region_state_key = keys::region_state_key(region_id);
     let region_state = match engine.get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key) {
@@ -52,6 +53,7 @@ fn get_region_local_state(engine: &engine_rocks::RocksEngine, region_id: u64) ->
     region_state
 }
 
+// TODO Need refactor if moved to raft-engine
 fn get_apply_state(engine: &engine_rocks::RocksEngine, region_id: u64) -> RaftApplyState {
     let apply_state_key = keys::apply_state_key(region_id);
     let apply_state = match engine.get_msg_cf::<RaftApplyState>(CF_RAFT, &apply_state_key) {
@@ -235,6 +237,18 @@ fn must_assert_state(
 ) {
 }
 
+fn get_valid_compact_index(states: &HashMap<u64, States>) -> (u64, u64) {
+    states.iter()
+        .map(|(_, s)| {
+            (
+                s.in_memory_apply_state.get_applied_index(),
+                s.in_memory_applied_term,
+            )
+        })
+        .min_by(|l, r| l.0.cmp(&r.0))
+        .unwrap()
+}
+
 #[test]
 fn test_config() {
     let mut file = tempfile::NamedTempFile::new().unwrap();
@@ -336,7 +350,6 @@ fn test_write_batch() {
 #[test]
 fn test_interaction() {
     // TODO Maybe we should pick this test to TiKV.
-
     let (mut cluster, pd_client) = new_mock_cluster(0, 3);
 
     fail::cfg("can_flush_data", "return(0)").unwrap();
@@ -353,11 +366,10 @@ fn test_interaction() {
     let compact_log = test_raftstore::new_compact_log_request(100, 10);
     let req = test_raftstore::new_admin_request(region_id, region.get_region_epoch(), compact_log);
     let res = cluster
-        .raw
         .call_command_on_leader(req.clone(), Duration::from_secs(3))
         .unwrap();
 
-    // Will be considered as a empty cmd
+    // Empty result can also be handled by post_exec
     let mut retry = 0;
     let new_states = loop {
         let new_states = collect_all_states(&cluster, region_id);
@@ -395,11 +407,9 @@ fn test_interaction() {
     fail::cfg("on_empty_cmd_normal", "return").unwrap();
     let prev_states = collect_all_states(&cluster, region_id);
     let res = cluster
-        .raw
         .call_command_on_leader(req, Duration::from_secs(3))
         .unwrap();
 
-    // post_exec will not filter empty cmds.
     std::thread::sleep(std::time::Duration::from_millis(400));
     let new_states = collect_all_states(&cluster, region_id);
     for i in prev_states.keys() {
@@ -437,8 +447,9 @@ fn test_leadership_change_impl(filter: bool) {
         fail::cfg("can_flush_data", "return(0)").unwrap();
     } else {
         // We don't return Persist after handling CompactLog.
-        fail::cfg("on_handle_admin_raft_cmd_no_persist", "return").unwrap();
+        fail::cfg("no_persist_compact_log", "return").unwrap();
     }
+    // Do not handle empty cmd.
     fail::cfg("on_empty_cmd_normal", "return").unwrap();
 
     let _ = cluster.run();
@@ -463,7 +474,7 @@ fn test_leadership_change_impl(filter: bool) {
     // Wait until all nodes have (k2, v2), then transfer leader.
     check_key(&cluster, b"k2", b"v2", Some(true), None, None);
     if filter {
-        // We should also filter normal kv, since CompactLog may be filtered as empty cmd.
+        // We should also filter normal kv, since a empty result can also be invoke pose_exec.
         fail::cfg("on_post_exec_normal", "return(false)").unwrap();
     }
     let prev_states = collect_all_states(&cluster, region_id);
@@ -499,8 +510,50 @@ fn test_leadership_change_impl(filter: bool) {
         fail::remove("can_flush_data");
         fail::remove("on_post_exec_normal");
     } else {
-        fail::remove("on_handle_admin_raft_cmd_no_persist");
+        fail::remove("no_persist_compact_log");
     }
+    cluster.shutdown();
+}
+
+#[test]
+fn test_kv_write_always_persist() {
+    let (mut cluster, pd_client) = new_mock_cluster(0, 3);
+
+    let _ = cluster.run();
+
+    cluster.must_put(b"k0", b"v0");
+    let region_id = cluster.get_region(b"k0").get_id();
+
+    let mut prev_states = collect_all_states(&cluster, region_id);
+    // Always persist on every command
+    fail::cfg("on_post_exec_normal_end", "return(true)");
+    for i in 1..20 {
+        let k = format!("k{}", i);
+        let v = format!("v{}", i);
+        cluster.must_put(k.as_bytes(), v.as_bytes());
+
+        // We can't always get kv from disk, even we commit everytime,
+        // since they are filtered by engint_tiflash
+        check_key(
+            &cluster,
+            k.as_bytes(),
+            v.as_bytes(),
+            Some(true),
+            None,
+            None,
+        );
+
+        // However, advanced apply index will always persisted.
+        let new_states = collect_all_states(&cluster, region_id);
+        for id in cluster.raw.engines.keys() {
+            assert_ne!(
+                &prev_states.get(id).unwrap().in_disk_apply_state,
+                &new_states.get(id).unwrap().in_disk_apply_state
+            );
+        }
+        prev_states = new_states;
+    }
+
     cluster.shutdown();
 }
 
@@ -510,9 +563,9 @@ fn test_kv_write() {
 
     fail::cfg("on_post_exec_normal", "return(false)").unwrap();
     fail::cfg("on_post_exec_admin", "return(false)").unwrap();
-    fail::cfg("on_handle_admin_raft_cmd_no_persist", "return").unwrap();
+    // No persist will be triggered by CompactLog
+    fail::cfg("no_persist_compact_log", "return").unwrap();
 
-    // Try to start this node, return after persisted some keys.
     let _ = cluster.run();
 
     for i in 0..10 {
@@ -573,10 +626,10 @@ fn test_kv_write() {
         );
     }
 
-    fail::remove("on_handle_admin_raft_cmd_no_persist");
+    fail::remove("no_persist_compact_log");
 
     let prev_states = collect_all_states(&cluster, r1);
-    // Write more after we force persist when compact log.
+    // Write more after we force persist when CompactLog.
     for i in 20..30 {
         let k = format!("k{}", i);
         let v = format!("v{}", i);
@@ -584,7 +637,7 @@ fn test_kv_write() {
     }
 
     // We can read from mock-store's memory, we are not sure if we can read from disk,
-    // since there may be or may not be a compact log.
+    // since there may be or may not be a CompactLog.
     for i in 11..30 {
         let k = format!("k{}", i);
         let v = format!("v{}", i);
@@ -598,7 +651,6 @@ fn test_kv_write() {
     let req =
         test_raftstore::new_admin_request(region_id, region_r.get_region_epoch(), compact_log);
     let res = cluster
-        .raw
         .call_command_on_leader(req, Duration::from_secs(3))
         .unwrap();
     assert!(res.get_header().has_error(), "{:?}", res);
@@ -630,7 +682,7 @@ fn test_kv_write() {
         );
     }
 
-    fail::remove("on_handle_admin_raft_cmd_no_persist");
+    fail::remove("no_persist_compact_log");
     cluster.shutdown();
 }
 
@@ -647,20 +699,56 @@ fn test_consistency_check() {
     let r = new_verify_hash_request(vec![1, 2, 3, 4, 5, 6], 1000);
     let req = test_raftstore::new_admin_request(region_id, region.get_region_epoch(), r);
     let res = cluster
-        .raw
         .call_command_on_leader(req, Duration::from_secs(3))
         .unwrap();
 
     let r = new_verify_hash_request(vec![7, 8, 9, 0], 1000);
     let req = test_raftstore::new_admin_request(region_id, region.get_region_epoch(), r);
     let res = cluster
-        .raw
         .call_command_on_leader(req, Duration::from_secs(3))
         .unwrap();
 
     cluster.must_put(b"k2", b"v2");
     cluster.shutdown();
 }
+
+#[test]
+fn test_old_compact_log() {
+    // TODO If we just return None for CompactLog, the region state in ApplyFsm will change.
+    // because, there are no rollback in new implementation.
+    let (mut cluster, pd_client) = new_mock_cluster(0, 3);
+    cluster.run();
+
+    // We don't return Persist after handling CompactLog.
+    fail::cfg("no_persist_compact_log", "return").unwrap();
+    for i in 0..10 {
+        let k = format!("k{}", i);
+        let v = format!("v{}", i);
+        cluster.must_put(k.as_bytes(), v.as_bytes());
+    }
+
+    for i in 0..10 {
+        let k = format!("k{}", i);
+        let v = format!("v{}", i);
+        check_key(&cluster,
+                  k.as_bytes(),
+                  v.as_bytes(),
+                  Some(true),
+                  None,
+                  None);
+    }
+
+    let region = cluster.get_region(b"k1");
+    let region_id = region.get_id();
+    let prev_state = collect_all_states(&cluster, region_id);
+    let (compact_index, compact_term) = get_valid_compact_index(&prev_state);
+    let compact_log = test_raftstore::new_compact_log_request(compact_index, compact_term);
+    let req = test_raftstore::new_admin_request(region_id, region.get_region_epoch(), compact_log);
+    let res = cluster
+        .call_command_on_leader(req, Duration::from_secs(3))
+        .unwrap();
+}
+
 
 #[test]
 fn test_compact_log() {
@@ -671,7 +759,6 @@ fn test_compact_log() {
     let region = cluster.get_region("k".as_bytes());
     let region_id = region.get_id();
 
-    // Don't handle CompactLog, and corresponding empty cmd.
     fail::cfg("on_empty_cmd_normal", "return").unwrap();
     fail::cfg("can_flush_data", "return(0)").unwrap();
     for i in 0..10 {
@@ -682,26 +769,16 @@ fn test_compact_log() {
 
     let prev_state = collect_all_states(&cluster, region_id);
 
-    let (compact_index, compact_term) = prev_state
-        .iter()
-        .map(|(_, s)| {
-            (
-                s.in_memory_apply_state.get_applied_index(),
-                s.in_memory_applied_term,
-            )
-        })
-        .min_by(|l, r| l.0.cmp(&r.0))
-        .unwrap();
+    let (compact_index, compact_term) = get_valid_compact_index(&prev_state);
     let compact_log = test_raftstore::new_compact_log_request(compact_index, compact_term);
     let req = test_raftstore::new_admin_request(region_id, region.get_region_epoch(), compact_log);
     let res = cluster
-        .raw
         .call_command_on_leader(req, Duration::from_secs(3))
         .unwrap();
     // compact index should less than applied index
     assert!(!res.get_header().has_error(), "{:?}", res);
 
-    // compact log is filtered
+    // CompactLog is filtered, because we can't flush data.
     let new_state = collect_all_states(&cluster, region_id);
     for i in prev_state.keys() {
         let old = prev_state.get(i).unwrap();
@@ -719,20 +796,10 @@ fn test_compact_log() {
     fail::remove("on_empty_cmd_normal");
     fail::remove("can_flush_data");
 
-    let (compact_index, compact_term) = new_state
-        .iter()
-        .map(|(_, s)| {
-            (
-                s.in_memory_apply_state.get_applied_index(),
-                s.in_memory_applied_term,
-            )
-        })
-        .min_by(|l, r| l.0.cmp(&r.0))
-        .unwrap();
+    let (compact_index, compact_term) = get_valid_compact_index(&new_state);
     let compact_log = test_raftstore::new_compact_log_request(compact_index, compact_term);
     let req = test_raftstore::new_admin_request(region_id, region.get_region_epoch(), compact_log);
     let res = cluster
-        .raw
         .call_command_on_leader(req, Duration::from_secs(3))
         .unwrap();
     assert!(!res.get_header().has_error(), "{:?}", res);
@@ -740,7 +807,7 @@ fn test_compact_log() {
     cluster.must_put(b"kz", b"vz");
     check_key(&cluster, b"kz", b"vz", Some(true), None, None);
 
-    // compact log is not filtered
+    // CompactLog is not filtered
     let new_state = collect_all_states(&cluster, region_id);
     for i in prev_state.keys() {
         let old = prev_state.get(i).unwrap();
@@ -758,7 +825,7 @@ fn test_compact_log() {
 fn test_split_merge() {
     let (mut cluster, pd_client) = new_mock_cluster(0, 3);
 
-    // can always apply snapshot immediately
+    // Can always apply snapshot immediately
     fail::cfg("on_can_apply_snapshot", "return(true)").unwrap();
     cluster.raw.cfg.raft_store.right_derive_when_split = true;
 
