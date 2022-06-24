@@ -57,7 +57,7 @@ pub struct EngineHelperSet {
 
 pub struct Cluster<T: Simulator<engine_tiflash::RocksEngine>> {
     pub raw: test_raftstore::Cluster<T, engine_tiflash::RocksEngine>,
-    pub ffi_helper_set: Arc<Mutex<RefCell<HashMap<u64, FFIHelperSet>>>>,
+    pub ffi_helper_set: Arc<Mutex<HashMap<u64, FFIHelperSet>>>,
     pub proxy_cfg: ProxyConfig,
 }
 
@@ -83,7 +83,7 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
         );
         Cluster {
             raw: cls,
-            ffi_helper_set: Arc::new(Mutex::new(RefCell::new(HashMap::default()))),
+            ffi_helper_set: Arc::new(Mutex::new(HashMap::default())),
             proxy_cfg,
         }
     }
@@ -252,14 +252,12 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
             self.ffi_helper_set
                 .lock()
                 .unwrap()
-                .get_mut()
                 .insert(node_id, ffi_helper_set);
             self.raw.run_node(node_id)?;
             let router = self.raw.sim.rl().get_router(node_id).unwrap();
             self.ffi_helper_set
                 .lock()
                 .unwrap()
-                .get_mut()
                 .get_mut(&node_id)
                 .unwrap()
                 .proxy
@@ -302,7 +300,6 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
             self.ffi_helper_set
                 .lock()
                 .unwrap()
-                .get_mut()
                 .insert(node_id, ffi_helper_set);
         }
         Ok(())

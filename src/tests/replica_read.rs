@@ -174,7 +174,7 @@ fn test_read_index() {
 
     for (id, peer, f) in &[(2, p2, true), (3, p3, false)] {
         let mut lock = cluster.ffi_helper_set.lock().unwrap();
-        let ffi_helper = lock.get_mut().get(id).unwrap();
+        let ffi_helper = lock.get(id).unwrap();
         let mut request = kvproto::kvrpcpb::ReadIndexRequest::default();
 
         {

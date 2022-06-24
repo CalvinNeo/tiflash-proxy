@@ -22,6 +22,7 @@ use engine_traits::{Iterable, Mutable, WriteBatch, WriteBatchExt};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
 use kvproto::raft_serverpb::{RaftApplyState, RegionLocalState, StoreIdent};
+use mock_engine_store::mock_cluster::FFIHelperSet;
 use mock_engine_store::transport_simulate::Direction;
 use mock_engine_store::transport_simulate::{
     CloneFilterFactory, CollectSnapshotFilter, RegionPacketFilter,
@@ -84,36 +85,51 @@ struct States {
     ident: StoreIdent,
 }
 
+fn iter_ffi_helpers(
+    cluster: &mock_engine_store::mock_cluster::Cluster<NodeCluster>,
+    store_ids: Option<Vec<u64>>,
+    f: &mut dyn FnMut(u64, &engine_rocks::RocksEngine, &mut FFIHelperSet) -> (),
+) {
+    let ids = match store_ids {
+        Some(ids) => ids,
+        None => cluster.raw.engines.keys().map(|e| *e).collect::<Vec<_>>(),
+    };
+    for id in ids {
+        let db = cluster.get_engine(id);
+        let engine = engine_rocks::RocksEngine::from_db(db);
+        let mut lock = cluster.ffi_helper_set.lock().unwrap();
+        let ffiset = lock.get_mut(&id).unwrap();
+        f(id, &engine, ffiset);
+    }
+}
+
 fn collect_all_states(
     cluster: &mock_engine_store::mock_cluster::Cluster<NodeCluster>,
     region_id: u64,
 ) -> HashMap<u64, States> {
     let mut prev_state: HashMap<u64, States> = HashMap::default();
-    for id in cluster.raw.engines.keys() {
-        let db = cluster.get_engine(*id);
-        let engine = engine_rocks::RocksEngine::from_db(db);
-
-        let mut lock = cluster.ffi_helper_set.lock().unwrap();
-        let server = &lock.get_mut().get(id).unwrap().engine_store_server;
-
-        let region = server.kvstore.get(&region_id).unwrap();
-
-        let ident = match engine.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY) {
-            Ok(Some(i)) => (i),
-            _ => unreachable!(),
-        };
-
-        prev_state.insert(
-            *id,
-            States {
-                in_memory_apply_state: region.apply_state.clone(),
-                in_memory_applied_term: region.applied_term,
-                in_disk_apply_state: get_apply_state(&engine, region_id),
-                in_disk_region_state: get_region_local_state(&engine, region_id),
-                ident: ident,
-            },
-        );
-    }
+    iter_ffi_helpers(
+        &cluster,
+        None,
+        &mut |id: u64, engine: &engine_rocks::RocksEngine, ffi: &mut FFIHelperSet| {
+            let server = &ffi.engine_store_server;
+            let region = server.kvstore.get(&region_id).unwrap();
+            let ident = match engine.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY) {
+                Ok(Some(i)) => (i),
+                _ => unreachable!(),
+            };
+            prev_state.insert(
+                id,
+                States {
+                    in_memory_apply_state: region.apply_state.clone(),
+                    in_memory_applied_term: region.applied_term,
+                    in_disk_apply_state: get_apply_state(&engine, region_id),
+                    in_disk_region_state: get_region_local_state(&engine, region_id),
+                    ident: ident,
+                },
+            );
+        },
+    );
     prev_state
 }
 
@@ -200,7 +216,7 @@ pub fn check_key(
         match in_mem {
             Some(b) => {
                 let mut lock = cluster.ffi_helper_set.lock().unwrap();
-                let server = &lock.get_mut().get(&id).unwrap().engine_store_server;
+                let server = &lock.get(&id).unwrap().engine_store_server;
                 if b {
                     must_get_mem(server, region_id, k, Some(v));
                 } else {
@@ -767,9 +783,8 @@ fn test_split_merge() {
 
     assert_eq!(r1.get_id(), r3_new.get_id());
 
-    for id in cluster.raw.engines.keys() {
-        let mut lock = cluster.ffi_helper_set.lock().unwrap();
-        let server = &lock.get_mut().get(id).unwrap().engine_store_server;
+    iter_ffi_helpers(&cluster, None, &mut |id: u64, _, ffi: &mut FFIHelperSet| {
+        let server = &ffi.engine_store_server;
         if !server.kvstore.contains_key(&r1_new.get_id()) {
             panic!("node {} has no region {}", id, r1_new.get_id())
         }
@@ -784,15 +799,14 @@ fn test_split_merge() {
         check_key(&cluster, b"k1", b"v1", None, Some(true), None);
         check_key(&cluster, b"k3", b"v3", None, Some(true), None);
         // TODO Region in memory data must not contradict, but now we do not delete data
-    }
+    });
 
     pd_client.must_merge(r1_new.get_id(), r3_new.get_id());
     let r1_new2 = cluster.get_region(b"k1");
     let r3_new2 = cluster.get_region(b"k3");
 
-    for id in cluster.raw.engines.keys() {
-        let mut lock = cluster.ffi_helper_set.lock().unwrap();
-        let server = &lock.get_mut().get(id).unwrap().engine_store_server;
+    iter_ffi_helpers(&cluster, None, &mut |id: u64, _, ffi: &mut FFIHelperSet| {
+        let server = &ffi.engine_store_server;
 
         // The left region is removed
         if server.kvstore.contains_key(&r1_new.get_id()) {
@@ -814,11 +828,10 @@ fn test_split_merge() {
 
         let origin_epoch = r3_new.get_region_epoch();
         let new_epoch = r3_new2.get_region_epoch();
-        tikv_util::debug!("!!!! origin {:?} new {:?}", r3_new, r3_new2);
         // PrepareMerge + CommitMerge, so it should be 2.
         assert_eq!(new_epoch.get_version(), origin_epoch.get_version() + 2);
         assert_eq!(new_epoch.get_conf_ver(), origin_epoch.get_conf_ver());
-    }
+    });
 
     fail::remove("on_can_apply_snapshot");
     cluster.shutdown();
@@ -840,65 +853,69 @@ fn test_get_region_local_state() {
 
     // Get RegionLocalState through ffi
     unsafe {
-        for (_, ffi_set) in cluster.ffi_helper_set.lock().unwrap().get_mut().iter_mut() {
-            let f = ffi_set.proxy_helper.fn_get_region_local_state.unwrap();
-            let mut state = kvproto::raft_serverpb::RegionLocalState::default();
-            let mut error_msg = mock_engine_store::RawCppStringPtrGuard::default();
+        iter_ffi_helpers(
+            &cluster,
+            None,
+            &mut |id: u64, _, ffi_set: &mut FFIHelperSet| {
+                let f = ffi_set.proxy_helper.fn_get_region_local_state.unwrap();
+                let mut state = kvproto::raft_serverpb::RegionLocalState::default();
+                let mut error_msg = mock_engine_store::RawCppStringPtrGuard::default();
 
-            assert_eq!(
-                f(
+                assert_eq!(
+                    f(
+                        ffi_set.proxy_helper.proxy_ptr,
+                        region_id,
+                        &mut state as *mut _ as _,
+                        error_msg.as_mut(),
+                    ),
+                    KVGetStatus::Ok
+                );
+                assert!(state.has_region());
+                assert_eq!(state.get_state(), kvproto::raft_serverpb::PeerState::Normal);
+                assert!(error_msg.as_ref().is_null());
+
+                let mut state = kvproto::raft_serverpb::RegionLocalState::default();
+                assert_eq!(
+                    f(
+                        ffi_set.proxy_helper.proxy_ptr,
+                        0, // not exist
+                        &mut state as *mut _ as _,
+                        error_msg.as_mut(),
+                    ),
+                    KVGetStatus::NotFound
+                );
+                assert!(!state.has_region());
+                assert!(error_msg.as_ref().is_null());
+
+                ffi_set
+                    .proxy
+                    .get_value_cf("none_cf", "123".as_bytes(), |value| {
+                        let msg = value.unwrap_err();
+                        assert_eq!(msg, "Storage Engine cf none_cf not found");
+                    });
+                ffi_set
+                    .proxy
+                    .get_value_cf("raft", "123".as_bytes(), |value| {
+                        let res = value.unwrap();
+                        assert!(res.is_none());
+                    });
+
+                // If we have no kv engine.
+                ffi_set.proxy.set_kv_engine(None);
+                let res = ffi_set.proxy_helper.fn_get_region_local_state.unwrap()(
                     ffi_set.proxy_helper.proxy_ptr,
                     region_id,
                     &mut state as *mut _ as _,
                     error_msg.as_mut(),
-                ),
-                KVGetStatus::Ok
-            );
-            assert!(state.has_region());
-            assert_eq!(state.get_state(), kvproto::raft_serverpb::PeerState::Normal);
-            assert!(error_msg.as_ref().is_null());
-
-            let mut state = kvproto::raft_serverpb::RegionLocalState::default();
-            assert_eq!(
-                f(
-                    ffi_set.proxy_helper.proxy_ptr,
-                    0, // not exist
-                    &mut state as *mut _ as _,
-                    error_msg.as_mut(),
-                ),
-                KVGetStatus::NotFound
-            );
-            assert!(!state.has_region());
-            assert!(error_msg.as_ref().is_null());
-
-            ffi_set
-                .proxy
-                .get_value_cf("none_cf", "123".as_bytes(), |value| {
-                    let msg = value.unwrap_err();
-                    assert_eq!(msg, "Storage Engine cf none_cf not found");
-                });
-            ffi_set
-                .proxy
-                .get_value_cf("raft", "123".as_bytes(), |value| {
-                    let res = value.unwrap();
-                    assert!(res.is_none());
-                });
-
-            // If we have no kv engine.
-            ffi_set.proxy.set_kv_engine(None);
-            let res = ffi_set.proxy_helper.fn_get_region_local_state.unwrap()(
-                ffi_set.proxy_helper.proxy_ptr,
-                region_id,
-                &mut state as *mut _ as _,
-                error_msg.as_mut(),
-            );
-            assert_eq!(res, KVGetStatus::Error);
-            assert!(!error_msg.as_ref().is_null());
-            assert_eq!(
-                error_msg.as_str(),
-                "KV engine is not initialized".as_bytes()
-            );
-        }
+                );
+                assert_eq!(res, KVGetStatus::Error);
+                assert!(!error_msg.as_ref().is_null());
+                assert_eq!(
+                    error_msg.as_str(),
+                    "KV engine is not initialized".as_bytes()
+                );
+            },
+        );
     }
 
     cluster.shutdown();
@@ -1136,6 +1153,7 @@ fn test_prehandle_fail() {
         .iter()
         .map(|e| e.0.to_owned())
         .collect::<Vec<_>>();
+    // If we fail to call pre-handle snapshot, we can still handle it when apply snapshot.
     fail::cfg("before_actually_pre_handle", "return");
     pd_client.must_add_peer(r1, new_peer(eng_ids[1], eng_ids[1]));
     check_key(
@@ -1148,7 +1166,7 @@ fn test_prehandle_fail() {
     );
     fail::remove("before_actually_pre_handle");
 
-    // We can apply snapshot, even if per_handle_snapshot is not called.
+    // If we failed in apply snapshot(not panic), even if per_handle_snapshot is not called.
     fail::cfg("on_ob_pre_handle_snapshot", "return");
     check_key(
         &cluster,
@@ -1197,12 +1215,14 @@ fn test_handle_destroy() {
     let peer_2 = find_peer(&region, eng_ids[1]).cloned().unwrap();
     cluster.must_transfer_leader(region_id, peer_1);
 
-    {
-        let mut lock = cluster.ffi_helper_set.lock().unwrap();
-        let server = &lock.get_mut().get(&eng_ids[1]).unwrap().engine_store_server;
-
-        assert!(server.kvstore.contains_key(&region_id));
-    }
+    iter_ffi_helpers(
+        &cluster,
+        Some(vec![eng_ids[1]]),
+        &mut |_, _, ffi: &mut FFIHelperSet| {
+            let server = &ffi.engine_store_server;
+            assert!(server.kvstore.contains_key(&region_id));
+        },
+    );
 
     pd_client.must_remove_peer(region_id, peer_2);
 
@@ -1215,12 +1235,15 @@ fn test_handle_destroy() {
         Some(vec![eng_ids[1]]),
     );
 
-    {
-        let mut lock = cluster.ffi_helper_set.lock().unwrap();
-        let server = &lock.get_mut().get(&eng_ids[1]).unwrap().engine_store_server;
-
-        assert!(!server.kvstore.contains_key(&region_id));
-    }
+    // Region removed in server.
+    iter_ffi_helpers(
+        &cluster,
+        Some(vec![eng_ids[1]]),
+        &mut |_, _, ffi: &mut FFIHelperSet| {
+            let server = &ffi.engine_store_server;
+            assert!(!server.kvstore.contains_key(&region_id));
+        },
+    );
 
     cluster.shutdown();
 }
