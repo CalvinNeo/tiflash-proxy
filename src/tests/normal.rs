@@ -439,7 +439,7 @@ fn test_leadership_change_impl(filter: bool) {
         // We don't return Persist after handling CompactLog.
         fail::cfg("on_handle_admin_raft_cmd_no_persist", "return").unwrap();
     }
-    fail::cfg("on_empty_cmd_normal", "return");
+    fail::cfg("on_empty_cmd_normal", "return").unwrap();
 
     let _ = cluster.run();
 
@@ -458,7 +458,7 @@ fn test_leadership_change_impl(filter: bool) {
     cluster.must_transfer_leader(region.get_id(), peer_1.clone());
 
     cluster.must_put(b"k2", b"v2");
-    fail::cfg("on_empty_cmd_normal", "return");
+    fail::cfg("on_empty_cmd_normal", "return").unwrap();
 
     // Wait until all nodes have (k2, v2), then transfer leader.
     check_key(&cluster, b"k2", b"v2", Some(true), None, None);
@@ -672,8 +672,8 @@ fn test_compact_log() {
     let region_id = region.get_id();
 
     // Don't handle CompactLog, and corresponding empty cmd.
-    fail::cfg("on_empty_cmd_normal", "return");
-    fail::cfg("can_flush_data", "return(0)");
+    fail::cfg("on_empty_cmd_normal", "return").unwrap();
+    fail::cfg("can_flush_data", "return(0)").unwrap();
     for i in 0..10 {
         let k = format!("k{}", i);
         let v = format!("v{}", i);
@@ -759,7 +759,7 @@ fn test_split_merge() {
     let (mut cluster, pd_client) = new_mock_cluster(0, 3);
 
     // can always apply snapshot immediately
-    fail::cfg("on_can_apply_snapshot", "return(true)");
+    fail::cfg("on_can_apply_snapshot", "return(true)").unwrap();
     cluster.raw.cfg.raft_store.right_derive_when_split = true;
 
     // May fail if cluster.start, since node 2 is not in region1.peers(),
@@ -925,7 +925,7 @@ fn test_get_region_local_state() {
 fn test_huge_snapshot() {
     let (mut cluster, pd_client) = new_mock_cluster(0, 3);
 
-    fail::cfg("on_can_apply_snapshot", "return(true)");
+    fail::cfg("on_can_apply_snapshot", "return(true)").unwrap();
     cluster.raw.cfg.raft_store.raft_log_gc_count_limit = 1000;
     cluster.raw.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10);
     cluster.raw.cfg.raft_store.snap_apply_batch_size = ReadableSize(500);
@@ -1112,7 +1112,7 @@ fn test_basic_concurrent_snapshot() {
     let r1 = cluster.get_region(b"k1").get_id();
     let r3 = cluster.get_region(b"k3").get_id();
 
-    fail::cfg("before_actually_pre_handle", "sleep(1000)");
+    fail::cfg("before_actually_pre_handle", "sleep(1000)").unwrap();
     tikv_util::info!("region k1 {} k3 {}", r1, r3);
     pd_client.add_peer(r1, new_peer(2, 2));
     pd_client.add_peer(r3, new_peer(2, 2));
@@ -1154,7 +1154,7 @@ fn test_prehandle_fail() {
         .map(|e| e.0.to_owned())
         .collect::<Vec<_>>();
     // If we fail to call pre-handle snapshot, we can still handle it when apply snapshot.
-    fail::cfg("before_actually_pre_handle", "return");
+    fail::cfg("before_actually_pre_handle", "return").unwrap();
     pd_client.must_add_peer(r1, new_peer(eng_ids[1], eng_ids[1]));
     check_key(
         &cluster,
@@ -1167,7 +1167,7 @@ fn test_prehandle_fail() {
     fail::remove("before_actually_pre_handle");
 
     // If we failed in apply snapshot(not panic), even if per_handle_snapshot is not called.
-    fail::cfg("on_ob_pre_handle_snapshot", "return");
+    fail::cfg("on_ob_pre_handle_snapshot", "return").unwrap();
     check_key(
         &cluster,
         b"k1",
