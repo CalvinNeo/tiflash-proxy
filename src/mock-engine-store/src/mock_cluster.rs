@@ -191,14 +191,17 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
 
     pub fn create_ffi_helper_set(
         &mut self,
-        engines: &mut Engines<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>,
+        engines: Engines<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>,
         key_manager: &Option<Arc<DataKeyManager>>,
         router: &Option<RaftRouter<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>>
     ) {
+        debug!("!!!!!! create_ffi_helper_set");
         let (mut ffi_helper_set, mut node_cfg) =
-            self.make_ffi_helper_set(0, engines.clone(), key_manager, router);
+            self.make_ffi_helper_set(0, engines, key_manager, router);
 
-        let helper_ptr = ffi_helper_set
+        // We can not use moved or cloned engines any more.
+        let (helper_ptr, ffi_hub) = {
+            let helper_ptr = ffi_helper_set
             .proxy
             .kv_engine
             .write()
@@ -207,12 +210,14 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
             .unwrap()
             .engine_store_server_helper;
 
-        let helper = engine_store_ffi::gen_engine_store_server_helper(helper_ptr);
-        let ffi_hub = Arc::new(engine_store_ffi::observer::TiFlashFFIHub {
-            engine_store_server_helper: helper,
-        });
+            let helper = engine_store_ffi::gen_engine_store_server_helper(helper_ptr);
+            let ffi_hub = Arc::new(engine_store_ffi::observer::TiFlashFFIHub {
+                engine_store_server_helper: helper,
+            });
+            (helper_ptr, ffi_hub)
+        };
+        let engines = ffi_helper_set.engine_store_server.engines.as_mut().unwrap();
 
-        debug!("!!!!! self.engine_store_server_helper oos {:?} helper_ptr {}", helper, helper_ptr);
         engines.kv.init(
             helper_ptr,
             self.proxy_cfg.snap_handle_pool_size,
@@ -220,11 +225,15 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
         );
 
         assert_ne!(engines.kv.engine_store_server_helper, 0);
-        self.ffi_helper_lst.push(ffi_helper_set)
+        self.ffi_helper_lst.push(ffi_helper_set);
     }
 
-    pub fn associate_ffi_helper_set(&mut self, node_id: u64) {
-        let mut ffi_helper_set = self.ffi_helper_lst.pop().unwrap();
+    pub fn associate_ffi_helper_set(&mut self, index: Option<usize>, node_id: u64) {
+        let mut ffi_helper_set = if let Some(i) = index {
+            self.ffi_helper_lst.remove(i)
+        } else {
+            self.ffi_helper_lst.pop().unwrap()
+        };
         ffi_helper_set.engine_store_server.id = node_id;
         self.ffi_helper_set
             .lock()
@@ -242,7 +251,10 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
             &self.raw.cfg,
         );
 
-        self.create_ffi_helper_set(&mut engines, &key_manager, &router);
+        self.create_ffi_helper_set(engines, &key_manager, &router);
+        let ffi_helper_set = self.ffi_helper_lst.last_mut().unwrap();
+        let engines = ffi_helper_set.engine_store_server.engines.as_mut().unwrap();
+
         // replace self.raw.create_engine
         self.raw.dbs.push(engines.clone());
         self.raw.key_managers.push(key_manager.clone());
@@ -257,9 +269,10 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
         for node_id in node_ids {
             let mut engines = self.raw.engines.get_mut(&node_id).unwrap().clone();
             let key_mgr = self.raw.key_managers_map[&node_id].clone();
-            // We must set up ffi_helper_set again
-            self.create_ffi_helper_set(&mut engines, &key_mgr, &None);
-            self.associate_ffi_helper_set(node_id);
+            // // We must set up ffi_helper_set again
+            // self.create_ffi_helper_set(engines, &key_mgr, &None);
+            self.associate_ffi_helper_set(Some(0), node_id);
+            // Like TiKVServer::init
             self.raw.run_node(node_id)?;
             // Since we use None to create_ffi_helper_set, we must init again.
             let router = self.raw.sim.rl().get_router(node_id).unwrap();
@@ -286,6 +299,7 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
             let key_manager = self.raw.key_managers.last().unwrap().clone();
             let node_id = {
                 let mut sim = self.raw.sim.wl();
+                // Like TiKVServer::init
                 sim.run_node(
                     0,
                     self.raw.cfg.clone(),
@@ -303,7 +317,7 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
             self.raw
                 .key_managers_map
                 .insert(node_id, key_manager.clone());
-            self.associate_ffi_helper_set(node_id);
+            self.associate_ffi_helper_set( None, node_id);
         }
         Ok(())
     }
