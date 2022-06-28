@@ -51,6 +51,9 @@ unsafe impl Sync for TiFlashFFIHub {}
 
 impl engine_tiflash::FFIHubInner for TiFlashFFIHub {
     fn get_store_stats(&self) -> engine_tiflash::FsStatsExt {
+        debug!("!!!!! self.engine_store_server_helper ois {:?} helper_ptr {}", self.engine_store_server_helper,
+            self.engine_store_server_helper as *const _ as isize,
+        );
         self.engine_store_server_helper
             .handle_compute_store_stats()
             .into()

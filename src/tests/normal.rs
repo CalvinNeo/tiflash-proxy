@@ -5,7 +5,7 @@ use mock_engine_store::node::NodeCluster;
 use mock_engine_store::server::ServerCluster;
 use std::collections::HashMap;
 use std::sync::{mpsc, Arc, RwLock};
-use test_raftstore::{must_get_equal, must_get_none, new_peer, TestPdClient};
+use test_raftstore::{must_get_equal, must_get_none, new_peer, TestPdClient, new_node_cluster};
 
 extern crate rocksdb;
 use crate::normal::rocksdb::Writable;
@@ -316,8 +316,8 @@ fn test_store_stats() {
     let _ = cluster.run();
 
     for id in cluster.raw.engines.keys() {
-        let store_stats = pd_client.get_store_stats(*id);
-        // assert!(store_stats.is_some());
+        let engine = cluster.get_tiflash_engine(*id);
+        assert_eq!(engine.ffi_hub.as_ref().unwrap().get_store_stats().capacity, 123456);
     }
 
     cluster.shutdown();
@@ -325,11 +325,11 @@ fn test_store_stats() {
 
 #[test]
 fn test_write_batch() {
-    let (mut cluster, pd_client) = new_mock_cluster(0, 1);
+    let mut cluster = new_node_cluster(0, 1);
 
     let _ = cluster.run();
 
-    for id in cluster.raw.engines.keys() {
+    for id in cluster.engines.keys() {
         let db = cluster.get_engine(*id);
         let engine = engine_rocks::RocksEngine::from_db(db.clone());
         let mut wb = engine.write_batch();
@@ -543,13 +543,14 @@ fn test_kv_write_always_persist() {
             None,
         );
 
+        // TODO This may happen after memory write data and before commit.
+        // We must check if we already have in memory.
         // However, advanced apply index will always persisted.
         let new_states = collect_all_states(&cluster, region_id);
         for id in cluster.raw.engines.keys() {
-            assert_ne!(
-                &prev_states.get(id).unwrap().in_disk_apply_state,
-                &new_states.get(id).unwrap().in_disk_apply_state
-            );
+            let p = &prev_states.get(id).unwrap().in_disk_apply_state;
+            let n = &new_states.get(id).unwrap().in_disk_apply_state;
+            assert_ne!(p, n);
         }
         prev_states = new_states;
     }

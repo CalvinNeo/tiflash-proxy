@@ -11,8 +11,36 @@ use engine_traits::{
 use rocksdb::Range as RocksRange;
 use tikv_util::box_try;
 use tikv_util::keybuilder::KeyBuilder;
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::MetadataExt;
 
 pub const MAX_DELETE_COUNT_BY_KEY: usize = 2048;
+
+fn get_fs_sid(path: &str) -> Result<u64> {
+    use std::ffi::CString;
+    use std::mem;
+    let cstr = match CString::new(std::ffi::OsStr::new(path).as_bytes()) {
+        Ok(cstr) => cstr,
+        Err(..) => {
+            return Err(engine_traits::Error::Engine(String::from("can't get fs sid")));
+        },
+    };
+
+    unsafe {
+        let mut stat: libc::statvfs = mem::zeroed();
+        if libc::statvfs(cstr.as_ptr() as *const _, &mut stat) != 0 {
+            return Err(engine_traits::Error::Engine(String::from("can't get fs sid")));
+        } else {
+            Ok(stat.f_fsid)
+        }
+    }
+}
+
+fn is_same_fs(p1: &str, p2: &str) -> bool {
+    let path1_meta = std::fs::metadata(p1).unwrap();
+    let path2_meta = std::fs::metadata(p2).unwrap();
+    path1_meta.dev() == path2_meta.dev()
+}
 
 impl RocksEngine {
     fn is_titan(&self) -> bool {
@@ -334,6 +362,28 @@ impl MiscExt for RocksEngine {
                 .unwrap_or_default()
                 != 0
     }
+
+    fn compute_total_capacity(&self, infos: &[engine_traits::StoreStatInfo]) -> Option<u64> {
+        let mut total: u64 = 0;
+        for info in infos.iter() {
+            if !is_same_fs(info.path, self.path()) {
+                total += info.capacity;
+            }
+        }
+        match self.get_engine_raw_capacity() {
+            Err(e) => None,
+            Ok(capacity) => Some(capacity),
+        }
+    }
+}
+
+impl RocksEngine {
+    fn get_engine_raw_capacity(&self) -> Result<u64> {
+        match self.ffi_hub.as_ref() {
+            None => Err(engine_traits::Error::Engine(String::from("ffi hub is not inited"))),
+            Some(h) => Ok(h.get_store_stats().capacity),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -604,4 +654,5 @@ mod tests {
         .unwrap();
         check_data(&db, &[cf], kvs_left.as_slice());
     }
+
 }

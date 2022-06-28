@@ -39,14 +39,17 @@ use raftstore::{Error, Result};
 use std::borrow::BorrowMut;
 use std::cell::RefCell;
 use tempfile::TempDir;
+use engine_tiflash::RocksEngine;
 // mock cluster
 
 pub struct FFIHelperSet {
     pub proxy: Box<engine_store_ffi::RaftStoreProxy>,
     pub proxy_helper: Box<engine_store_ffi::RaftStoreProxyFFIHelper>,
     pub engine_store_server: Box<EngineStoreServer>,
+    // Make interface happy, don't own proxy and server.
     pub engine_store_server_wrap: Box<EngineStoreServerWrap>,
     pub engine_store_server_helper: Box<engine_store_ffi::EngineStoreServerHelper>,
+    pub engine_store_server_helper_ptr: isize,
 }
 
 pub struct EngineHelperSet {
@@ -57,6 +60,7 @@ pub struct EngineHelperSet {
 
 pub struct Cluster<T: Simulator<engine_tiflash::RocksEngine>> {
     pub raw: test_raftstore::Cluster<T, engine_tiflash::RocksEngine>,
+    pub ffi_helper_lst: Vec<FFIHelperSet>,
     pub ffi_helper_set: Arc<Mutex<HashMap<u64, FFIHelperSet>>>,
     pub proxy_cfg: ProxyConfig,
 }
@@ -83,6 +87,7 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
         );
         Cluster {
             raw: cls,
+            ffi_helper_lst: Vec::default(),
             ffi_helper_set: Arc::new(Mutex::new(HashMap::default())),
             proxy_cfg,
         }
@@ -96,6 +101,7 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
         mut node_cfg: TiKvConfig,
         cluster_id: isize,
     ) -> (FFIHelperSet, TiKvConfig) {
+        // We must allocate on heap to avoid move.
         let proxy = Box::new(engine_store_ffi::RaftStoreProxy {
             status: AtomicU8::new(engine_store_ffi::RaftProxyStatus::Idle as u8),
             key_manager: key_mgr.clone(),
@@ -120,20 +126,21 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
             std::pin::Pin::new(&*engine_store_server_wrap),
         ));
 
-        let helper_sz = &*engine_store_server_helper as *const _ as isize;
+        let engine_store_server_helper_ptr = &*engine_store_server_helper as *const _ as isize;
         proxy
             .kv_engine
             .write()
             .unwrap()
             .as_mut()
             .unwrap()
-            .engine_store_server_helper = helper_sz;
+            .engine_store_server_helper = engine_store_server_helper_ptr;
         let ffi_helper_set = FFIHelperSet {
             proxy,
             proxy_helper,
             engine_store_server,
             engine_store_server_wrap,
             engine_store_server_helper,
+            engine_store_server_helper_ptr,
         };
         (ffi_helper_set, node_cfg)
     }
@@ -182,20 +189,16 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
         region_id
     }
 
-    pub fn create_engine(
+    pub fn create_ffi_helper_set(
         &mut self,
-        router: Option<RaftRouter<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>>,
-    ) -> FFIHelperSet {
-        let (mut engines, key_manager, dir) = create_tiflash_test_engine(
-            router.clone(),
-            self.raw.io_rate_limiter.clone(),
-            &self.raw.cfg,
-        );
-
+        engines: &mut Engines<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>,
+        key_manager: &Option<Arc<DataKeyManager>>,
+        router: &Option<RaftRouter<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>>
+    ) {
         let (mut ffi_helper_set, mut node_cfg) =
-            self.make_ffi_helper_set(0, engines.clone(), &key_manager, &router);
+            self.make_ffi_helper_set(0, engines.clone(), key_manager, router);
 
-        let helper_sz = ffi_helper_set
+        let helper_ptr = ffi_helper_set
             .proxy
             .kv_engine
             .write()
@@ -204,25 +207,46 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
             .unwrap()
             .engine_store_server_helper;
 
-        let helper = engine_store_ffi::gen_engine_store_server_helper(helper_sz);
+        let helper = engine_store_ffi::gen_engine_store_server_helper(helper_ptr);
         let ffi_hub = Arc::new(engine_store_ffi::observer::TiFlashFFIHub {
             engine_store_server_helper: helper,
         });
 
+        debug!("!!!!! self.engine_store_server_helper oos {:?} helper_ptr {}", helper, helper_ptr);
         engines.kv.init(
-            helper_sz,
+            helper_ptr,
             self.proxy_cfg.snap_handle_pool_size,
             Some(ffi_hub),
         );
 
         assert_ne!(engines.kv.engine_store_server_helper, 0);
+        self.ffi_helper_lst.push(ffi_helper_set)
+    }
 
+    pub fn associate_ffi_helper_set(&mut self, node_id: u64) {
+        let mut ffi_helper_set = self.ffi_helper_lst.pop().unwrap();
+        ffi_helper_set.engine_store_server.id = node_id;
+        self.ffi_helper_set
+            .lock()
+            .unwrap()
+            .insert(node_id, ffi_helper_set);
+    }
+
+    pub fn create_engine(
+        &mut self,
+        router: Option<RaftRouter<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>>,
+    ) {
+        let (mut engines, key_manager, dir) = create_tiflash_test_engine(
+            router.clone(),
+            self.raw.io_rate_limiter.clone(),
+            &self.raw.cfg,
+        );
+
+        self.create_ffi_helper_set(&mut engines, &key_manager, &router);
         // replace self.raw.create_engine
         self.raw.dbs.push(engines.clone());
         self.raw.key_managers.push(key_manager.clone());
         self.raw.paths.push(dir);
-
-        ffi_helper_set
     }
 
     pub fn start(&mut self) -> ServerResult<()> {
@@ -233,33 +257,15 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
         for node_id in node_ids {
             let mut engines = self.raw.engines.get_mut(&node_id).unwrap().clone();
             let key_mgr = self.raw.key_managers_map[&node_id].clone();
-            let (mut ffi_helper_set, mut node_cfg) =
-                self.make_ffi_helper_set(node_id, engines, &key_mgr, &None);
-            self.raw
-                .engines
-                .get_mut(&node_id)
-                .unwrap()
-                .kv
-                .engine_store_server_helper = ffi_helper_set
-                .proxy
-                .kv_engine
-                .write()
-                .unwrap()
-                .as_mut()
-                .unwrap()
-                .engine_store_server_helper;
-            ffi_helper_set.engine_store_server.id = node_id;
-            self.ffi_helper_set
-                .lock()
-                .unwrap()
-                .insert(node_id, ffi_helper_set);
+            // We must set up ffi_helper_set again
+            self.create_ffi_helper_set(&mut engines, &key_mgr, &None);
+            self.associate_ffi_helper_set(node_id);
             self.raw.run_node(node_id)?;
+            // Since we use None to create_ffi_helper_set, we must init again.
             let router = self.raw.sim.rl().get_router(node_id).unwrap();
-            self.ffi_helper_set
-                .lock()
-                .unwrap()
-                .get_mut(&node_id)
-                .unwrap()
+            let mut lock = self.ffi_helper_set.lock().unwrap();
+            let ffi_helper_set = lock.get_mut(&node_id).unwrap();
+            ffi_helper_set
                 .proxy
                 .read_index_client = Some(Box::new(engine_store_ffi::ReadIndexClient::new(
                 router.clone(),
@@ -270,7 +276,7 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
         // Try start new nodes.
         for _ in 0..self.raw.count - self.raw.engines.len() {
             let (router, system) = create_raft_batch_system(&self.raw.cfg.raft_store);
-            let mut ffi_helper_set = self.create_engine(Some(router.clone()));
+            self.create_engine(Some(router.clone()));
 
             let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
             let props = GroupProperties::default();
@@ -278,17 +284,18 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
 
             let engines = self.raw.dbs.last().unwrap().clone();
             let key_manager = self.raw.key_managers.last().unwrap().clone();
-
-            let mut sim = self.raw.sim.wl();
-            let node_id = sim.run_node(
-                0,
-                self.raw.cfg.clone(),
-                engines.clone(),
-                store_meta.clone(),
-                key_manager.clone(),
-                router,
-                system,
-            )?;
+            let node_id = {
+                let mut sim = self.raw.sim.wl();
+                sim.run_node(
+                    0,
+                    self.raw.cfg.clone(),
+                    engines.clone(),
+                    store_meta.clone(),
+                    key_manager.clone(),
+                    router,
+                    system,
+                )?
+            };
             debug!("start new node {}", node_id);
             self.raw.group_props.insert(node_id, props);
             self.raw.engines.insert(node_id, engines.clone());
@@ -296,11 +303,7 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
             self.raw
                 .key_managers_map
                 .insert(node_id, key_manager.clone());
-            ffi_helper_set.engine_store_server.id = node_id;
-            self.ffi_helper_set
-                .lock()
-                .unwrap()
-                .insert(node_id, ffi_helper_set);
+            self.associate_ffi_helper_set(node_id);
         }
         Ok(())
     }
@@ -315,6 +318,10 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
 
     pub fn get_region(&self, key: &[u8]) -> metapb::Region {
         self.raw.get_region(key)
+    }
+
+    pub fn get_tiflash_engine(&self, node_id: u64) -> &engine_tiflash::RocksEngine {
+        &self.raw.engines[&node_id].kv
     }
 
     pub fn get_engine(&self, node_id: u64) -> Arc<DB> {

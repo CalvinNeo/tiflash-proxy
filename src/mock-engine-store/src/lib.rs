@@ -962,7 +962,7 @@ unsafe extern "C" fn ffi_handle_compute_store_stats(
         fs_stats: ffi_interfaces::FsStats {
             used_size: 0,
             avail_size: 0,
-            capacity_size: 0,
+            capacity_size: 123456,
             ok: 1,
         },
         engine_bytes_written: 0,

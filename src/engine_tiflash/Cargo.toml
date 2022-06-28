@@ -52,6 +52,7 @@ fail = "0.5"
 case_macros = { path = "../../contrib/tikv/components/case_macros" }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 raftstore = { path = "../../contrib/tikv/components/raftstore", default-features = false }
+libc = "0.2"
 
 [dependencies.rocksdb]
 git = "https://github.com/tikv/rust-rocksdb.git"
