@@ -6,12 +6,10 @@ use engine_store_ffi::{
 use lazy_static::lazy_static;
 use mock_engine_store::node::NodeCluster;
 use std::collections::hash_map::{Entry, RandomState};
-use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use test_raftstore::new_peer;
-use test_raftstore::TestPdClient;
 use tikv_util::{debug, error, info, warn};
 
 #[derive(Default)]

@@ -7,9 +7,7 @@ use std::collections::HashMap;
 use std::sync::{mpsc, Arc, RwLock};
 use test_raftstore::{must_get_equal, must_get_none, new_node_cluster, new_peer, TestPdClient};
 
-extern crate rocksdb;
-use crate::normal::rocksdb::Writable;
-use ::rocksdb::DB;
+use engine_rocks::raw::DB;
 use engine_store_ffi::config::{ensure_no_common_unrecognized_keys, ProxyConfig};
 use engine_tiflash::*;
 use engine_traits::Iterator;
@@ -592,11 +590,16 @@ fn test_kv_write_always_persist() {
         // This may happen after memory write data and before commit.
         // We must check if we already have in memory.
         check_apply_state(&cluster, region_id, &prev_states, Some(false), None);
+        std::thread::sleep(std::time::Duration::from_millis(20));
         // However, advanced apply index will always persisted.
         let new_states = collect_all_states(&cluster, region_id);
         for id in cluster.raw.engines.keys() {
             let p = &prev_states.get(id).unwrap().in_disk_apply_state;
             let n = &new_states.get(id).unwrap().in_disk_apply_state;
+            if p == n {
+                tikv_util::debug!("!!!!! p == n"; "pn" => ?p, "peer_id" => id,
+                    "nmem" => ?new_states.get(id).unwrap().in_memory_apply_state);
+            }
             assert_ne!(p, n);
         }
         prev_states = new_states;
