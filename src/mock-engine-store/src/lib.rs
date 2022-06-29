@@ -920,19 +920,25 @@ unsafe extern "C" fn ffi_handle_ingest_sst(
 ) -> ffi_interfaces::EngineStoreApplyRes {
     let store = into_engine_store_server_wrap(arg1);
     let proxy_helper = &mut *(store.maybe_proxy_helper.unwrap());
-    debug!("ingest sst with len {}", snaps.len);
 
     let region_id = header.region_id;
     let kvstore = &mut (*store.engine_store_server).kvstore;
-    let kv = &mut (*store.engine_store_server).engines.as_mut().unwrap().kv;
     let region = kvstore.get_mut(&region_id).unwrap();
 
     let index = header.index;
     let term = header.term;
+    debug!("handle ingest sst";
+        "header" => ?header,
+        "region_id" => region_id,
+        "snap len" => snap.len,
+    );
 
     for i in 0..snaps.len {
         let snapshot = snaps.views.add(i as usize);
         let path = std::str::from_utf8_unchecked((*snapshot).path.to_slice());
+        debug!("handle ingest sst file";
+            "path" => path,
+        );
         let mut sst_reader =
             SSTReader::new(proxy_helper, &*(snapshot as *mut ffi_interfaces::SSTView));
 
@@ -941,8 +947,6 @@ unsafe extern "C" fn ffi_handle_ingest_sst(
             let value = sst_reader.value();
 
             let cf_index = (*snapshot).type_ as usize;
-            let cf_name = cf_to_name((*snapshot).type_);
-
             let tikv_key = keys::data_key(key.to_slice());
 
             write_kv_in_mem(region, cf_index, key.to_slice(), value.to_slice());

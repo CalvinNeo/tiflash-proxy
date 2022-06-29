@@ -77,7 +77,7 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
         test_util::init_log_for_test();
         fail::cfg("apply_on_handle_snapshot_sync", "return").unwrap();
 
-        let mut cls = test_raftstore::Cluster::new(
+        let cls = test_raftstore::Cluster::new(
             id,
             count,
             sim,
@@ -98,7 +98,7 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
         engines: Engines<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>,
         key_mgr: &Option<Arc<DataKeyManager>>,
         router: &Option<RaftRouter<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>>,
-        mut node_cfg: TiKvConfig,
+        node_cfg: TiKvConfig,
         cluster_id: isize,
     ) -> (FFIHelperSet, TiKvConfig) {
         // We must allocate on heap to avoid move.

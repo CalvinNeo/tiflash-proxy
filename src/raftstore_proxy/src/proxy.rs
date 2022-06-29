@@ -294,7 +294,7 @@ pub unsafe fn run_proxy(
 
     let mut proxy_unrecognized_keys = Vec::new();
     // Double read the same file for proxy-specific arguments.
-    let mut proxy_config = matches.value_of_os("config").map_or_else(
+    let proxy_config = matches.value_of_os("config").map_or_else(
         engine_store_ffi::config::ProxyConfig::default,
         |path| {
             let path = Path::new(path);

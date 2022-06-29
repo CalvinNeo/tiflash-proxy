@@ -84,10 +84,7 @@ impl RocksEngine {
 
     pub fn from_db(db: Arc<DB>) -> Self {
         RocksEngine {
-            rocks: engine_rocks::RocksEngine {
-                db,
-                shared_block_cache: false,
-            },
+            rocks: engine_rocks::RocksEngine::from_db(db),
             engine_store_server_helper: 0,
             apply_snap_pool: None,
             pool_capacity: 0,
@@ -101,11 +98,11 @@ impl RocksEngine {
     }
 
     pub fn as_inner(&self) -> &Arc<DB> {
-        &self.rocks.db
+        &self.rocks.as_inner()
     }
 
     pub fn get_sync_db(&self) -> Arc<DB> {
-        self.rocks.db.clone()
+        self.rocks.get_sync_db()
     }
 
     pub fn exists(path: &str) -> bool {
@@ -121,7 +118,7 @@ impl RocksEngine {
     }
 
     pub fn set_shared_block_cache(&mut self, enable: bool) {
-        self.rocks.shared_block_cache = enable;
+        self.rocks.set_shared_block_cache(enable);
     }
 }
 
@@ -129,45 +126,23 @@ impl KvEngine for RocksEngine {
     type Snapshot = RocksSnapshot;
 
     fn snapshot(&self) -> RocksSnapshot {
-        RocksSnapshot::new(self.rocks.db.clone())
+        self.rocks.snapshot()
     }
 
     fn sync(&self) -> Result<()> {
-        self.rocks.db.sync_wal().map_err(Error::Engine)
+        self.rocks.sync()
     }
 
     fn flush_metrics(&self, instance: &str) {
-        for t in ENGINE_TICKER_TYPES {
-            let v = self.rocks.db.get_and_reset_statistics_ticker_count(*t);
-            flush_engine_ticker_metrics(*t, v, instance);
-        }
-        for t in ENGINE_HIST_TYPES {
-            if let Some(v) = self.rocks.db.get_statistics_histogram(*t) {
-                flush_engine_histogram_metrics(*t, v, instance);
-            }
-        }
-        if self.rocks.db.is_titan() {
-            for t in TITAN_ENGINE_TICKER_TYPES {
-                let v = self.rocks.db.get_and_reset_statistics_ticker_count(*t);
-                flush_engine_ticker_metrics(*t, v, instance);
-            }
-            for t in TITAN_ENGINE_HIST_TYPES {
-                if let Some(v) = self.rocks.db.get_statistics_histogram(*t) {
-                    flush_engine_histogram_metrics(*t, v, instance);
-                }
-            }
-        }
-        flush_engine_properties(&self.rocks.db, instance, self.rocks.shared_block_cache);
-        flush_engine_iostall_properties(&self.rocks.db, instance);
+        self.rocks.flush_metrics(instance);
     }
 
     fn reset_statistics(&self) {
-        self.rocks.db.reset_statistics();
+        self.rocks.reset_statistics();
     }
 
     fn bad_downcast<T: 'static>(&self) -> &T {
-        let e: &dyn Any = &self.rocks.db;
-        e.downcast_ref().expect("bad engine downcast")
+        self.rocks.bad_downcast()
     }
 
     fn can_apply_snapshot(&self) -> bool {
@@ -187,21 +162,11 @@ impl Iterable for RocksEngine {
     type Iterator = RocksEngineIterator;
 
     fn iterator_opt(&self, opts: IterOptions) -> Result<Self::Iterator> {
-        let opt: RocksReadOptions = opts.into();
-        Ok(RocksEngineIterator::from_raw(DBIterator::new(
-            self.rocks.db.clone(),
-            opt.into_raw(),
-        )))
+        self.rocks.iterator_opt(opts)
     }
 
     fn iterator_cf_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
-        let handle = get_cf_handle(&self.rocks.db, cf)?;
-        let opt: RocksReadOptions = opts.into();
-        Ok(RocksEngineIterator::from_raw(DBIterator::new_cf(
-            self.rocks.db.clone(),
-            handle,
-            opt.into_raw(),
-        )))
+        self.rocks.iterator_cf_opt(cf, opts)
     }
 }
 
@@ -209,9 +174,7 @@ impl Peekable for RocksEngine {
     type DBVector = RocksDBVector;
 
     fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<RocksDBVector>> {
-        let opt: RocksReadOptions = opts.into();
-        let v = self.rocks.db.get_opt(key, &opt.into_raw())?;
-        Ok(v.map(RocksDBVector::from_raw))
+        self.rocks.get_value_opt(opts, key)
     }
 
     fn get_value_cf_opt(
@@ -220,10 +183,7 @@ impl Peekable for RocksEngine {
         cf: &str,
         key: &[u8],
     ) -> Result<Option<RocksDBVector>> {
-        let opt: RocksReadOptions = opts.into();
-        let handle = get_cf_handle(&self.rocks.db, cf)?;
-        let v = self.rocks.db.get_cf_opt(handle, key, &opt.into_raw())?;
-        Ok(v.map(RocksDBVector::from_raw))
+        self.rocks.get_value_cf_opt(opts, cf, key)
     }
 }
 
@@ -236,17 +196,18 @@ impl RocksEngine {
 impl SyncMutable for RocksEngine {
     fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
         if self.do_write(engine_traits::CF_DEFAULT, key) {
-            return self.rocks.db.put(key, value).map_err(Error::Engine);
+            return self.rocks.get_sync_db().put(key, value).map_err(Error::Engine);
         }
         Ok(())
     }
 
     fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
         if self.do_write(cf, key) {
-            let handle = get_cf_handle(&self.rocks.db, cf)?;
+            let db = self.rocks.get_sync_db();
+            let handle = get_cf_handle(&db, cf)?;
             return self
                 .rocks
-                .db
+                .get_sync_db()
                 .put_cf(handle, key, value)
                 .map_err(Error::Engine);
         }
@@ -255,15 +216,16 @@ impl SyncMutable for RocksEngine {
 
     fn delete(&self, key: &[u8]) -> Result<()> {
         if self.do_write(engine_traits::CF_DEFAULT, key) {
-            return self.rocks.db.delete(key).map_err(Error::Engine);
+            return self.rocks.get_sync_db().delete(key).map_err(Error::Engine);
         }
         Ok(())
     }
 
     fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<()> {
         if self.do_write(cf, key) {
-            let handle = get_cf_handle(&self.rocks.db, cf)?;
-            return self.rocks.db.delete_cf(handle, key).map_err(Error::Engine);
+            let db = self.rocks.get_sync_db();
+            let handle = get_cf_handle(&db, cf)?;
+            return self.rocks.get_sync_db().delete_cf(handle, key).map_err(Error::Engine);
         }
         Ok(())
     }

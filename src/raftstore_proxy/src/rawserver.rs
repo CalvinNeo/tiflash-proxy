@@ -809,7 +809,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let importer = Arc::new(importer);
 
         // Register TiFlash observer
-        let snap_handle_pool_size = self.proxy_config.snap_handle_pool_size;
         let tiflash_ob = engine_store_ffi::observer::TiFlashObserver::new(
             node.id(),
             self.engines.as_ref().unwrap().engines.kv.clone(),
