@@ -41,137 +41,41 @@ pub fn new_engine(
     new_engine_opt(path, db_opts, cf_opts)
 }
 
-/// Turns "dynamic level size" off for the existing column family which was off before.
-/// Column families are small, HashMap isn't necessary.
-fn adjust_dynamic_level_bytes(
-    cf_descs: &[CColumnFamilyDescriptor],
-    cf_options: &mut CFOptions<'_>,
-) {
-    if let Some(cf_desc) = cf_descs
-        .iter()
-        .find(|cf_desc| cf_desc.name() == cf_options.cf)
-    {
-        let existed_dynamic_level_bytes =
-            cf_desc.options().get_level_compaction_dynamic_level_bytes();
-        if existed_dynamic_level_bytes
-            != cf_options
-                .options
-                .get_level_compaction_dynamic_level_bytes()
-        {
-            warn!(
-                "change dynamic_level_bytes for existing column family is danger";
-                "old_value" => existed_dynamic_level_bytes,
-                "new_value" => cf_options.options.get_level_compaction_dynamic_level_bytes(),
-            );
-        }
-        cf_options
-            .options
-            .set_level_compaction_dynamic_level_bytes(existed_dynamic_level_bytes);
-    }
-}
+// /// Turns "dynamic level size" off for the existing column family which was off before.
+// /// Column families are small, HashMap isn't necessary.
+// fn adjust_dynamic_level_bytes(
+//     cf_descs: &[CColumnFamilyDescriptor],
+//     cf_options: &mut CFOptions<'_>,
+// ) {
+//     if let Some(cf_desc) = cf_descs
+//         .iter()
+//         .find(|cf_desc| cf_desc.name() == cf_options.cf)
+//     {
+//         let existed_dynamic_level_bytes =
+//             cf_desc.options().get_level_compaction_dynamic_level_bytes();
+//         if existed_dynamic_level_bytes
+//             != cf_options
+//                 .options
+//                 .get_level_compaction_dynamic_level_bytes()
+//         {
+//             warn!(
+//                 "change dynamic_level_bytes for existing column family is danger";
+//                 "old_value" => existed_dynamic_level_bytes,
+//                 "new_value" => cf_options.options.get_level_compaction_dynamic_level_bytes(),
+//             );
+//         }
+//         cf_options
+//             .options
+//             .set_level_compaction_dynamic_level_bytes(existed_dynamic_level_bytes);
+//     }
+// }
 
 pub fn new_engine_opt(
     path: &str,
     mut db_opt: DBOptions,
     cfs_opts: Vec<CFOptions<'_>>,
 ) -> Result<DB> {
-    // Creates a new db if it doesn't exist.
-    if !db_exist(path) {
-        db_opt.create_if_missing(true);
-
-        let mut cfs_v = vec![];
-        let mut cf_opts_v = vec![];
-        if let Some(x) = cfs_opts.iter().find(|x| x.cf == CF_DEFAULT) {
-            cfs_v.push(x.cf);
-            cf_opts_v.push(x.options.clone());
-        }
-        let mut db = DB::open_cf(db_opt, path, cfs_v.into_iter().zip(cf_opts_v).collect())?;
-        for x in cfs_opts {
-            if x.cf == CF_DEFAULT {
-                continue;
-            }
-            db.create_cf((x.cf, x.options))?;
-        }
-
-        return Ok(db);
-    }
-
-    db_opt.create_if_missing(false);
-
-    // Lists all column families in current db.
-    let cfs_list = DB::list_column_families(&db_opt, path)?;
-    let existed: Vec<&str> = cfs_list.iter().map(|v| v.as_str()).collect();
-    let needed: Vec<&str> = cfs_opts.iter().map(|x| x.cf).collect();
-
-    let cf_descs = if !existed.is_empty() {
-        let env = match db_opt.env() {
-            Some(env) => env,
-            None => Arc::new(Env::default()),
-        };
-        // panic if OPTIONS not found for existing instance?
-        let (_, tmp) = load_latest_options(path, &env, true)
-            .unwrap_or_else(|e| panic!("failed to load_latest_options {:?}", e))
-            .unwrap_or_else(|| panic!("couldn't find the OPTIONS file"));
-        tmp
-    } else {
-        vec![]
-    };
-
-    // If all column families exist, just open db.
-    if existed == needed {
-        let mut cfs_v = vec![];
-        let mut cfs_opts_v = vec![];
-        for mut x in cfs_opts {
-            adjust_dynamic_level_bytes(&cf_descs, &mut x);
-            cfs_v.push(x.cf);
-            cfs_opts_v.push(x.options);
-        }
-
-        let db = DB::open_cf(db_opt, path, cfs_v.into_iter().zip(cfs_opts_v).collect())?;
-        return Ok(db);
-    }
-
-    // Opens db.
-    let mut cfs_v: Vec<&str> = Vec::new();
-    let mut cfs_opts_v: Vec<ColumnFamilyOptions> = Vec::new();
-    for cf in &existed {
-        cfs_v.push(cf);
-        match cfs_opts.iter().find(|x| x.cf == *cf) {
-            Some(x) => {
-                let mut tmp = CFOptions::new(x.cf, x.options.clone());
-                adjust_dynamic_level_bytes(&cf_descs, &mut tmp);
-                cfs_opts_v.push(tmp.options);
-            }
-            None => {
-                cfs_opts_v.push(ColumnFamilyOptions::new());
-            }
-        }
-    }
-    let cfds = cfs_v.into_iter().zip(cfs_opts_v).collect();
-    let mut db = DB::open_cf(db_opt, path, cfds)?;
-
-    // Drops discarded column families.
-    //    for cf in existed.iter().filter(|x| needed.iter().find(|y| y == x).is_none()) {
-    for cf in cfs_diff(&existed, &needed) {
-        // Never drop default column families.
-        if cf != CF_DEFAULT {
-            db.drop_cf(cf)?;
-        }
-    }
-
-    // Creates needed column families if they don't exist.
-    for cf in cfs_diff(&needed, &existed) {
-        db.create_cf((
-            cf,
-            cfs_opts
-                .iter()
-                .find(|x| x.cf == cf)
-                .unwrap()
-                .options
-                .clone(),
-        ))?;
-    }
-    Ok(db)
+    engine_rocks::raw_util::new_engine_opt(path, db_opt, cfs_opts)
 }
 
 pub fn db_exist(path: &str) -> bool {

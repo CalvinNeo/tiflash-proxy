@@ -930,7 +930,7 @@ unsafe extern "C" fn ffi_handle_ingest_sst(
     debug!("handle ingest sst";
         "header" => ?header,
         "region_id" => region_id,
-        "snap len" => snap.len,
+        "snap len" => snaps.len,
     );
 
     for i in 0..snaps.len {
