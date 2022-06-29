@@ -414,8 +414,19 @@ impl AdminObserver for TiFlashObserver {
             | AdminCmdType::PrepareMerge
             | AdminCmdType::RollbackMerge => {
                 let mut r = AdminResponse::default();
-                r.mut_split()
-                    .set_left(region_state.modified_region.as_ref().unwrap().clone());
+                match region_state.modified_region.as_ref() {
+                    Some(r) => r.mut_split().set_left(r.clone()),
+                    None => {
+                        error!("empty modified region";
+                            "region_id" => ob_ctx.region().get_id(),
+                            "peer_id" => region_state.peer_id,
+                            "term" => cmd.term,
+                            "index" => cmd.index,
+                            "command" => ?request
+                        );
+                        panic!("empty modified region");
+                    }
+                }
                 new_response = Some(r);
             }
             _ => (),
@@ -516,7 +527,7 @@ impl ApplySnapshotObserver for TiFlashObserver {
         snap_key: &SnapKey,
         snap: &raftstore::store::Snapshot,
     ) {
-        info!("prehandle snapshot peer_id {}", peer_id);
+        info!("prehandle snapshot"; "peer_id" => peer_id, "region_id" => ob_ctx.region().get_id());
         fail::fail_point!("on_ob_pre_handle_snapshot", |_| {});
 
         let (sender, receiver) = mpsc::channel();
@@ -534,25 +545,31 @@ impl ApplySnapshotObserver for TiFlashObserver {
         self.engine
             .pending_applies_count
             .fetch_add(1, Ordering::Relaxed);
-        self.engine
-            .apply_snap_pool
-            .as_ref()
-            .unwrap()
-            .spawn(async move {
-                // The original implementation is in `Snapshot`, so we don't need to care abort lifetime.
-                fail::fail_point!("before_actually_pre_handle", |_| {});
-                let res = pre_handle_snapshot_impl(
-                    engine_store_server_helper,
-                    task.peer_id,
-                    ssts,
-                    &region,
-                    &snap_key,
-                );
-                match sender.send(res) {
-                    Err(e) => error!("pre_handle_snapshot err when send to receiver"; "e" => ?e),
-                    Ok(_) => (),
-                }
-            });
+        match self.engine.apply_snap_pool.as_ref() {
+            Some(p) => {
+                p.spawn(async move {
+                    // The original implementation is in `Snapshot`, so we don't need to care abort lifetime.
+                    fail::fail_point!("before_actually_pre_handle", |_| {});
+                    let res = pre_handle_snapshot_impl(
+                        engine_store_server_helper,
+                        task.peer_id,
+                        ssts,
+                        &region,
+                        &snap_key,
+                    );
+                    match sender.send(res) {
+                        Err(e) => error!(?e; "pre_handle_snapshot err when send to receiver";),
+                        Ok(_) => (),
+                    }
+                });
+            }
+            None => {
+                self.engine
+                    .pending_applies_count
+                    .fetch_sub(1, Ordering::Relaxed);
+                error!("apply_snap_pool is not initialized, quit background prehandle"; "peer_id" => peer_id, "region_id" => ob_ctx.region().get_id());
+            }
+        }
     }
 
     fn post_apply_snapshot(
