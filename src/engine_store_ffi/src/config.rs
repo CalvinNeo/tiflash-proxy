@@ -33,7 +33,7 @@ impl ProxyConfig {
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let s = std::fs::read_to_string(path)?;
         let mut deserializer = toml::Deserializer::new(&s);
-        let mut cfg: ProxyConfig = if let Some(keys) = unrecognized_keys {
+        let cfg: ProxyConfig = if let Some(keys) = unrecognized_keys {
             serde_ignored::deserialize(&mut deserializer, |key| keys.push(key.to_string()))
         } else {
             <ProxyConfig as serde::Deserialize>::deserialize(&mut deserializer)
@@ -44,8 +44,8 @@ impl ProxyConfig {
 }
 
 pub fn ensure_no_common_unrecognized_keys(
-    proxy_unrecognized_keys: &Vec<String>,
-    unrecognized_keys: &Vec<String>,
+    proxy_unrecognized_keys: &[String],
+    unrecognized_keys: &[String],
 ) -> Result<(), String> {
     // We can't just compute intersection, since `rocksdb.z` equals not `rocksdb`.
     let proxy_part = HashSet::<_>::from_iter(proxy_unrecognized_keys.iter());
@@ -53,8 +53,8 @@ pub fn ensure_no_common_unrecognized_keys(
         .iter()
         .filter(|s| {
             let mut pref: String = String::from("");
-            for p in s.split(".") {
-                if pref != "" {
+            for p in s.split('.') {
+                if !pref.is_empty() {
                     pref += "."
                 }
                 pref += p;
@@ -63,7 +63,7 @@ pub fn ensure_no_common_unrecognized_keys(
                     return true;
                 }
             }
-            return false;
+            false
         })
         .collect::<Vec<_>>();
     if inter.len() != 0 {

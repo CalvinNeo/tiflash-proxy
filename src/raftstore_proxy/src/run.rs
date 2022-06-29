@@ -7,12 +7,10 @@ use file_system::get_io_rate_limiter;
 use raft_log_engine::RaftLogEngine;
 use raftstore::store::fsm::store::PENDING_MSG_CAP;
 use raftstore::store::fsm::StoreMeta;
-use raftstore::store::LocalReader;
 use rawserver::ConfiguredRaftEngine;
 use rawserver::EnginesResourceInfo;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use tikv::server::RaftKv;
 use tikv::{config::TiKvConfig, server::CPU_CORES_QUOTA_GAUGE};
 use tikv_util::{
     sys::{register_memory_usage_high_water, SysQuota},
@@ -28,7 +26,7 @@ use tikv_util::{crit, error, error_unknown, info, thd_name, warn};
 
 pub fn init_tiflash_engines<CER: ConfiguredRaftEngine>(
     tikv: &mut rawserver::TiKVServer<CER>,
-    flow_listener: engine_rocks::FlowListener,
+    _flow_listener: engine_rocks::FlowListener,
     engine_store_server_helper: isize,
 ) -> (
     Engines<engine_tiflash::RocksEngine, CER>,
@@ -71,7 +69,7 @@ pub fn init_tiflash_engines<CER: ConfiguredRaftEngine>(
     kv_engine.init(
         engine_store_server_helper,
         tikv.proxy_config.snap_handle_pool_size,
-        Some(ffi_hub.clone()),
+        Some(ffi_hub),
     );
     let engines = Engines::new(kv_engine, raft_engine);
 

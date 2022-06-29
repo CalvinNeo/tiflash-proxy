@@ -147,12 +147,12 @@ impl Mutable for RocksWriteBatch {
         Ok(())
     }
 
-    fn delete_range(&mut self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
+    fn delete_range(&mut self, _begin_key: &[u8], _end_key: &[u8]) -> Result<()> {
         // do nothing
         Ok(())
     }
 
-    fn delete_range_cf(&mut self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
+    fn delete_range_cf(&mut self, _cf: &str, _begin_key: &[u8], _end_key: &[u8]) -> Result<()> {
         // do nothing
         Ok(())
     }

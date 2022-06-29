@@ -188,11 +188,12 @@ impl<ER: RaftEngine, EK: KvEngine> ReadIndex for ReadIndexClient<ER, EK> {
 
             let (cb, f) = paired_future_callback();
 
-            if let Err(_) = self.routers[region_id as usize % self.routers.len()]
+            if let Err(e) = self.routers[region_id as usize % self.routers.len()]
                 .lock()
                 .unwrap()
                 .send_command(cmd, Callback::Read(cb), RaftCmdExtraOpts::default())
             {
+                error!("make_read_index_task send command error"; "e" => ?e);
                 return None;
             } else {
                 Some(f)

@@ -98,7 +98,7 @@ impl RocksEngine {
     }
 
     pub fn as_inner(&self) -> &Arc<DB> {
-        &self.rocks.as_inner()
+        self.rocks.as_inner()
     }
 
     pub fn get_sync_db(&self) -> Arc<DB> {
@@ -196,7 +196,11 @@ impl RocksEngine {
 impl SyncMutable for RocksEngine {
     fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
         if self.do_write(engine_traits::CF_DEFAULT, key) {
-            return self.rocks.get_sync_db().put(key, value).map_err(Error::Engine);
+            return self
+                .rocks
+                .get_sync_db()
+                .put(key, value)
+                .map_err(Error::Engine);
         }
         Ok(())
     }
@@ -225,7 +229,11 @@ impl SyncMutable for RocksEngine {
         if self.do_write(cf, key) {
             let db = self.rocks.get_sync_db();
             let handle = get_cf_handle(&db, cf)?;
-            return self.rocks.get_sync_db().delete_cf(handle, key).map_err(Error::Engine);
+            return self
+                .rocks
+                .get_sync_db()
+                .delete_cf(handle, key)
+                .map_err(Error::Engine);
         }
         Ok(())
     }

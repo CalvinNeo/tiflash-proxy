@@ -14,7 +14,7 @@ impl ImportExt for RocksEngine {
 
     fn ingest_external_file_cf(&self, cf: &str, files: &[&str]) -> Result<()> {
         // do nothing
-        return Ok(());
+        Ok(())
     }
 }
 

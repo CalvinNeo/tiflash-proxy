@@ -1,7 +1,6 @@
 #![feature(slice_take)]
 #![allow(unused_imports)]
 #[warn(unreachable_patterns)]
-
 use collections::HashSet;
 use encryption::DataKeyManager;
 pub use engine_store_ffi::interfaces::root::DB as ffi_interfaces;
@@ -172,7 +171,8 @@ unsafe fn load_from_db(store: &mut EngineStoreServer, region: &mut Box<Region>) 
         kv.scan_cf(cf_name, &start, &end, false, |k, v| {
             region.data[cf].insert(k.to_vec(), v.to_vec());
             Ok(true)
-        }).unwrap();
+        })
+        .unwrap();
     }
 }
 
@@ -829,7 +829,9 @@ unsafe extern "C" fn ffi_pre_handle_snapshot(
     let mut region_meta = kvproto::metapb::Region::default();
     assert_ne!(region_buff.data, std::ptr::null());
     assert_ne!(region_buff.len, 0);
-    region_meta.merge_from_bytes(region_buff.to_slice()).unwrap();
+    region_meta
+        .merge_from_bytes(region_buff.to_slice())
+        .unwrap();
 
     let mut region = Box::new(Region::new(region_meta));
 

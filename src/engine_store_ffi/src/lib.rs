@@ -107,7 +107,7 @@ impl RaftStoreProxyFFI for RaftStoreProxy {
         let kv_engine_lock = self.kv_engine.read().unwrap();
         let kv_engine = kv_engine_lock.as_ref();
         if kv_engine.is_none() {
-            cb(Err(format!("KV engine is not initialized")));
+            cb(Err("KV engine is not initialized".to_string()));
             return;
         }
         let value = kv_engine.unwrap().get_value_cf(cf, key);
@@ -131,7 +131,7 @@ impl RaftStoreProxyPtr {
         &*(self.inner as *const RaftStoreProxy)
     }
     pub fn is_null(&self) -> bool {
-        self.inner == std::ptr::null()
+        self.inner.is_null()
     }
 }
 
@@ -310,7 +310,7 @@ pub extern "C" fn ffi_make_read_index_task(
             .unwrap()
             .make_read_index_task(req)
     };
-    return match task {
+    match task {
         None => {
             RawRustPtr::default() // Full or Disconnected
         }
@@ -318,7 +318,7 @@ pub extern "C" fn ffi_make_read_index_task(
             ptr: Box::into_raw(Box::new(task)) as *mut _,
             type_: RawRustPtrType::ReadIndexTask.into(),
         },
-    };
+    }
 }
 
 pub extern "C" fn ffi_make_async_waker(
@@ -1052,48 +1052,48 @@ impl EngineStoreServerHelper {
 
 impl Clone for SSTReaderPtr {
     fn clone(&self) -> SSTReaderPtr {
-        return SSTReaderPtr {
+        SSTReaderPtr {
             inner: self.inner.clone(),
-        };
+        }
     }
 }
 
 impl Clone for BaseBuffView {
     fn clone(&self) -> BaseBuffView {
-        return BaseBuffView {
+        BaseBuffView {
             data: self.data.clone(),
             len: self.len.clone(),
-        };
+        }
     }
 }
 
 impl Clone for SSTView {
     fn clone(&self) -> SSTView {
-        return SSTView {
+        SSTView {
             type_: self.type_.clone(),
             path: self.path.clone(),
-        };
+        }
     }
 }
 
 impl Clone for SSTReaderInterfaces {
     fn clone(&self) -> SSTReaderInterfaces {
-        return SSTReaderInterfaces {
+        SSTReaderInterfaces {
             fn_get_sst_reader: self.fn_get_sst_reader.clone(),
             fn_remained: self.fn_remained.clone(),
             fn_key: self.fn_key.clone(),
             fn_value: self.fn_value.clone(),
             fn_next: self.fn_next.clone(),
             fn_gc: self.fn_gc.clone(),
-        };
+        }
     }
 }
 
 impl Clone for RaftStoreProxyPtr {
     fn clone(&self) -> RaftStoreProxyPtr {
-        return RaftStoreProxyPtr {
+        RaftStoreProxyPtr {
             inner: self.inner.clone(),
-        };
+        }
     }
 }
 
@@ -1125,9 +1125,9 @@ pub unsafe extern "C" fn ffi_poll_timer_task(task_ptr: RawVoidPtr, waker: RawVoi
     } else {
         Some(&*(waker as *mut utils::ArcNotifyWaker))
     };
-    return if let Some(_) = { utils::poll_timer_task(task, waker) } {
+    if let Some(_) = { utils::poll_timer_task(task, waker) } {
         1
     } else {
         0
-    };
+    }
 }

@@ -165,6 +165,11 @@ impl TiFlashObserver {
             if let Err(e) =
                 raftstore::store::fsm::apply::check_sst_for_ingestion(sst, &ob_ctx.region())
             {
+                error!(?e;
+                 "proxy ingest fail";
+                 "sst" => ?sst,
+                 "region" => ?&ob_ctx.region(),
+                );
                 break;
             }
 
@@ -349,7 +354,7 @@ impl AdminObserver for TiFlashObserver {
             }
             _ => (),
         };
-        return false;
+        false
     }
 
     fn post_exec_admin(
@@ -419,13 +424,13 @@ impl AdminObserver for TiFlashObserver {
         let flash_res = {
             match new_response {
                 Some(r) => self.engine_store_server_helper.handle_admin_raft_cmd(
-                    &request,
+                    request,
                     &r,
                     RaftCmdHeader::new(ob_ctx.region().get_id(), cmd.index, cmd.term),
                 ),
                 None => self.engine_store_server_helper.handle_admin_raft_cmd(
-                    &request,
-                    &admin_reponse,
+                    request,
+                    admin_reponse,
                     RaftCmdHeader::new(ob_ctx.region().get_id(), cmd.index, cmd.term),
                 ),
             }
@@ -438,13 +443,7 @@ impl AdminObserver for TiFlashObserver {
                 }
                 false
             }
-            EngineStoreApplyRes::Persist => {
-                if !region_state.pending_remove {
-                    true
-                } else {
-                    false
-                }
-            }
+            EngineStoreApplyRes::Persist => !region_state.pending_remove,
             EngineStoreApplyRes::NotFound => {
                 error!(
                     "region not found in engine-store, maybe have exec `RemoveNode` first";
@@ -524,7 +523,7 @@ impl ApplySnapshotObserver for TiFlashObserver {
         let task = Arc::new(PrehandleTask::new(receiver, peer_id));
         {
             let mut lock = self.pre_handle_snapshot_ctx.lock().unwrap();
-            let mut ctx = lock.deref_mut();
+            let ctx = lock.deref_mut();
             ctx.tracer.insert(snap_key.clone(), task.clone());
         }
 
@@ -549,7 +548,10 @@ impl ApplySnapshotObserver for TiFlashObserver {
                     &region,
                     &snap_key,
                 );
-                sender.send(res);
+                match sender.send(res) {
+                    Err(e) => error!("pre_handle_snapshot err when send to receiver"; "e" => ?e),
+                    Ok(_) => (),
+                }
             });
     }
 
@@ -563,7 +565,7 @@ impl ApplySnapshotObserver for TiFlashObserver {
         fail::fail_point!("on_ob_post_apply_snapshot", |_| {});
         let maybe_snapshot = {
             let mut lock = self.pre_handle_snapshot_ctx.lock().unwrap();
-            let mut ctx = lock.deref_mut();
+            let ctx = lock.deref_mut();
             ctx.tracer.remove(snap_key)
         };
         let need_retry = match maybe_snapshot {

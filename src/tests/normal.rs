@@ -247,10 +247,15 @@ pub fn check_apply_state(
         let new_states = collect_all_states(&cluster, region_id);
         let new = new_states.get(&region_id).unwrap();
         if let Some(b) = in_mem_eq {
-            if b && new.in_memory_applied_term == old.in_memory_applied_term && new.in_memory_apply_state == old.in_memory_apply_state {
+            if b && new.in_memory_applied_term == old.in_memory_applied_term
+                && new.in_memory_apply_state == old.in_memory_apply_state
+            {
                 break;
             }
-            if !b && (new.in_memory_applied_term != old.in_memory_applied_term || new.in_memory_apply_state != old.in_memory_apply_state) {
+            if !b
+                && (new.in_memory_applied_term != old.in_memory_applied_term
+                    || new.in_memory_apply_state != old.in_memory_apply_state)
+            {
                 break;
             }
         }

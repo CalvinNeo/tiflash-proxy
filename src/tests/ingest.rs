@@ -2,8 +2,8 @@ use std::sync::{Arc, RwLock};
 use test_raftstore::{must_get_equal, must_get_none, TestPdClient};
 
 extern crate rocksdb;
-use engine_traits::{Error, Result};
 use engine_traits::SstExt;
+use engine_traits::{Error, Result};
 use engine_traits::{Iterable, MiscExt};
 use kvproto::raft_serverpb::{RaftApplyState, RegionLocalState, StoreIdent};
 
