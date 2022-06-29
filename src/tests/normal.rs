@@ -79,7 +79,7 @@ pub fn new_verify_hash_request(hash: Vec<u8>, index: u64) -> AdminRequest {
     req
 }
 
-struct States {
+pub struct States {
     in_memory_apply_state: RaftApplyState,
     in_memory_applied_term: u64,
     in_disk_apply_state: RaftApplyState,
@@ -233,8 +233,57 @@ pub fn check_key(
 fn must_assert_state(
     cluster: &mock_engine_store::mock_cluster::Cluster<NodeCluster>,
     region_id: u64,
-    prev_state: HashMap<u64, States>,
+    prev_state: &HashMap<u64, States>,
 ) {
+}
+
+pub fn check_apply_state(
+    cluster: &mock_engine_store::mock_cluster::Cluster<NodeCluster>,
+    region_id: u64,
+    prev_states: &HashMap<u64, States>,
+    in_mem_eq: Option<bool>,
+    in_disk_eq: Option<bool>,
+) {
+    let old = prev_states.get(&region_id).unwrap();
+    for _ in 1..10 {
+        let new_states = collect_all_states(&cluster, region_id);
+        let new = new_states.get(&region_id).unwrap();
+        if let Some(b) = in_mem_eq {
+            if b && new.in_memory_applied_term == old.in_memory_applied_term && new.in_memory_apply_state == old.in_memory_apply_state {
+                break;
+            }
+            if !b && (new.in_memory_applied_term != old.in_memory_applied_term || new.in_memory_apply_state != old.in_memory_apply_state) {
+                break;
+            }
+        }
+        if let Some(b) = in_disk_eq {
+            if b && new.in_disk_apply_state == old.in_disk_apply_state {
+                break;
+            }
+            if !b && new.in_disk_apply_state != old.in_disk_apply_state {
+                break;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let new_states = collect_all_states(&cluster, region_id);
+    let new = new_states.get(&region_id).unwrap();
+    if let Some(b) = in_mem_eq {
+        if b {
+            assert_eq!(new.in_memory_applied_term, old.in_memory_applied_term);
+            assert_eq!(new.in_memory_apply_state, old.in_memory_apply_state);
+        } else {
+            assert_ne!(new.in_memory_apply_state, old.in_memory_apply_state);
+        }
+    }
+    if let Some(b) = in_disk_eq {
+        if b && new.in_disk_apply_state == old.in_disk_apply_state {
+            assert_eq!(new.in_disk_apply_state, old.in_disk_apply_state);
+        }
+        if !b && new.in_disk_apply_state != old.in_disk_apply_state {
+            assert_ne!(new.in_disk_apply_state, old.in_disk_apply_state);
+        }
+    }
 }
 
 fn get_valid_compact_index(states: &HashMap<u64, States>) -> (u64, u64) {
@@ -540,8 +589,9 @@ fn test_kv_write_always_persist() {
         // since they are filtered by engint_tiflash
         check_key(&cluster, k.as_bytes(), v.as_bytes(), Some(true), None, None);
 
-        // TODO This may happen after memory write data and before commit.
+        // This may happen after memory write data and before commit.
         // We must check if we already have in memory.
+        check_apply_state(&cluster, region_id, &prev_states, Some(false), None);
         // However, advanced apply index will always persisted.
         let new_states = collect_all_states(&cluster, region_id);
         for id in cluster.raw.engines.keys() {
