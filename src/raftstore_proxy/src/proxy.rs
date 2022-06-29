@@ -31,17 +31,6 @@ pub fn proxy_version_info() -> String {
     )
 }
 
-fn log_proxy_info() {
-    info!("Welcome To New RaftStore Proxy");
-    for line in proxy_version_info().lines() {
-        info!("{}", line);
-    }
-}
-
-pub fn print_proxy_version() {
-    println!("{}", proxy_version_info());
-}
-
 pub unsafe fn run_proxy(
     argc: c_int,
     argv: *const *const c_char,

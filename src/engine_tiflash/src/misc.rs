@@ -9,10 +9,10 @@ use engine_traits::{
     Range, Result, SstWriter, SstWriterBuilder, WriteBatch, WriteBatchExt, ALL_CFS,
 };
 use rocksdb::Range as RocksRange;
-use tikv_util::box_try;
-use tikv_util::keybuilder::KeyBuilder;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
+use tikv_util::box_try;
+use tikv_util::keybuilder::KeyBuilder;
 
 pub const MAX_DELETE_COUNT_BY_KEY: usize = 2048;
 
@@ -22,14 +22,18 @@ fn get_fs_sid(path: &str) -> Result<u64> {
     let cstr = match CString::new(std::ffi::OsStr::new(path).as_bytes()) {
         Ok(cstr) => cstr,
         Err(..) => {
-            return Err(engine_traits::Error::Engine(String::from("can't get fs sid")));
-        },
+            return Err(engine_traits::Error::Engine(String::from(
+                "can't get fs sid",
+            )));
+        }
     };
 
     unsafe {
         let mut stat: libc::statvfs = mem::zeroed();
         if libc::statvfs(cstr.as_ptr() as *const _, &mut stat) != 0 {
-            return Err(engine_traits::Error::Engine(String::from("can't get fs sid")));
+            return Err(engine_traits::Error::Engine(String::from(
+                "can't get fs sid",
+            )));
         } else {
             Ok(stat.f_fsid)
         }
@@ -380,7 +384,9 @@ impl MiscExt for RocksEngine {
 impl RocksEngine {
     fn get_engine_raw_capacity(&self) -> Result<u64> {
         match self.ffi_hub.as_ref() {
-            None => Err(engine_traits::Error::Engine(String::from("ffi hub is not inited"))),
+            None => Err(engine_traits::Error::Engine(String::from(
+                "ffi hub is not inited",
+            ))),
             Some(h) => Ok(h.get_store_stats().capacity),
         }
     }
@@ -654,5 +660,4 @@ mod tests {
         .unwrap();
         check_data(&db, &[cf], kvs_left.as_slice());
     }
-
 }

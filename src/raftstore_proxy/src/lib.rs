@@ -8,6 +8,8 @@ mod proxy;
 mod rawserver;
 mod run;
 
+/// Used on TiFlash side.
+#[warn(dead_code)]
 fn log_proxy_info() {
     info!("Welcome To RaftStore Proxy");
     for line in proxy_version_info().lines() {
@@ -15,12 +17,13 @@ fn log_proxy_info() {
     }
 }
 
+#[warn(dead_code)]
 pub fn print_proxy_version() {
     println!("{}", proxy_version_info());
 }
 
 /// # Safety
-/// Print version infomatin to std output.
+/// Print version infomation to std output.
 #[no_mangle]
 pub unsafe extern "C" fn print_raftstore_proxy_version() {
     print_proxy_version();

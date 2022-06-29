@@ -32,6 +32,7 @@ use tikv_util::{debug, info, warn};
 
 use engine_rocks::raw::DB;
 use engine_store_ffi::config::ProxyConfig;
+use engine_tiflash::RocksEngine;
 use file_system::IORateLimiter;
 use kvproto::metapb;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
@@ -39,7 +40,6 @@ use raftstore::{Error, Result};
 use std::borrow::BorrowMut;
 use std::cell::RefCell;
 use tempfile::TempDir;
-use engine_tiflash::RocksEngine;
 // mock cluster
 
 pub struct FFIHelperSet {
@@ -193,7 +193,7 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
         &mut self,
         engines: Engines<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>,
         key_manager: &Option<Arc<DataKeyManager>>,
-        router: &Option<RaftRouter<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>>
+        router: &Option<RaftRouter<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>>,
     ) {
         debug!("!!!!!! create_ffi_helper_set");
         let (mut ffi_helper_set, mut node_cfg) =
@@ -202,13 +202,13 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
         // We can not use moved or cloned engines any more.
         let (helper_ptr, ffi_hub) = {
             let helper_ptr = ffi_helper_set
-            .proxy
-            .kv_engine
-            .write()
-            .unwrap()
-            .as_mut()
-            .unwrap()
-            .engine_store_server_helper;
+                .proxy
+                .kv_engine
+                .write()
+                .unwrap()
+                .as_mut()
+                .unwrap()
+                .engine_store_server_helper;
 
             let helper = engine_store_ffi::gen_engine_store_server_helper(helper_ptr);
             let ffi_hub = Arc::new(engine_store_ffi::observer::TiFlashFFIHub {
@@ -278,12 +278,11 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
             let router = self.raw.sim.rl().get_router(node_id).unwrap();
             let mut lock = self.ffi_helper_set.lock().unwrap();
             let ffi_helper_set = lock.get_mut(&node_id).unwrap();
-            ffi_helper_set
-                .proxy
-                .read_index_client = Some(Box::new(engine_store_ffi::ReadIndexClient::new(
-                router.clone(),
-                SysQuota::cpu_cores_quota() as usize * 2,
-            )));
+            ffi_helper_set.proxy.read_index_client =
+                Some(Box::new(engine_store_ffi::ReadIndexClient::new(
+                    router.clone(),
+                    SysQuota::cpu_cores_quota() as usize * 2,
+                )));
         }
 
         // Try start new nodes.
@@ -317,7 +316,7 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
             self.raw
                 .key_managers_map
                 .insert(node_id, key_manager.clone());
-            self.associate_ffi_helper_set( None, node_id);
+            self.associate_ffi_helper_set(None, node_id);
         }
         Ok(())
     }

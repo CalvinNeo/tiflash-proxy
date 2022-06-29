@@ -5,7 +5,7 @@ use mock_engine_store::node::NodeCluster;
 use mock_engine_store::server::ServerCluster;
 use std::collections::HashMap;
 use std::sync::{mpsc, Arc, RwLock};
-use test_raftstore::{must_get_equal, must_get_none, new_peer, TestPdClient, new_node_cluster};
+use test_raftstore::{must_get_equal, must_get_none, new_node_cluster, new_peer, TestPdClient};
 
 extern crate rocksdb;
 use crate::normal::rocksdb::Writable;
@@ -238,7 +238,8 @@ fn must_assert_state(
 }
 
 fn get_valid_compact_index(states: &HashMap<u64, States>) -> (u64, u64) {
-    states.iter()
+    states
+        .iter()
         .map(|(_, s)| {
             (
                 s.in_memory_apply_state.get_applied_index(),
@@ -253,7 +254,7 @@ fn get_valid_compact_index(states: &HashMap<u64, States>) -> (u64, u64) {
 fn test_config() {
     let mut file = tempfile::NamedTempFile::new().unwrap();
     let text = "memory-usage-high-water=0.65\nsnap-handle-pool-size=4\n[nosense]\nfoo=2\n[rocksdb]\nmax-open-files = 111\nz=1";
-    write!(file, "{}", text);
+    write!(file, "{}", text).unwrap();
     let path = file.path();
 
     let mut unrecognized_keys = Vec::new();
@@ -317,7 +318,10 @@ fn test_store_stats() {
 
     for id in cluster.raw.engines.keys() {
         let engine = cluster.get_tiflash_engine(*id);
-        assert_eq!(engine.ffi_hub.as_ref().unwrap().get_store_stats().capacity, 123456);
+        assert_eq!(
+            engine.ffi_hub.as_ref().unwrap().get_store_stats().capacity,
+            123456
+        );
     }
 
     cluster.shutdown();
@@ -333,11 +337,11 @@ fn test_write_batch() {
         let db = cluster.get_engine(*id);
         let engine = engine_rocks::RocksEngine::from_db(db.clone());
         let mut wb = engine.write_batch();
-        wb.put(b"k2", b"v2");
+        wb.put(b"k2", b"v2").unwrap();
         let res = db.get(b"k2");
         assert!(res.is_ok());
         assert!(res.unwrap().is_none());
-        wb.write();
+        wb.write().unwrap();
         let res = db.get(b"k2");
         let v = res.unwrap().unwrap();
         assert_eq!(v.deref(), b"v2");
@@ -526,7 +530,7 @@ fn test_kv_write_always_persist() {
 
     let mut prev_states = collect_all_states(&cluster, region_id);
     // Always persist on every command
-    fail::cfg("on_post_exec_normal_end", "return(true)");
+    fail::cfg("on_post_exec_normal_end", "return(true)").unwrap();
     for i in 1..20 {
         let k = format!("k{}", i);
         let v = format!("v{}", i);
@@ -534,14 +538,7 @@ fn test_kv_write_always_persist() {
 
         // We can't always get kv from disk, even we commit everytime,
         // since they are filtered by engint_tiflash
-        check_key(
-            &cluster,
-            k.as_bytes(),
-            v.as_bytes(),
-            Some(true),
-            None,
-            None,
-        );
+        check_key(&cluster, k.as_bytes(), v.as_bytes(), Some(true), None, None);
 
         // TODO This may happen after memory write data and before commit.
         // We must check if we already have in memory.
@@ -731,12 +728,7 @@ fn test_old_compact_log() {
     for i in 0..10 {
         let k = format!("k{}", i);
         let v = format!("v{}", i);
-        check_key(&cluster,
-                  k.as_bytes(),
-                  v.as_bytes(),
-                  Some(true),
-                  None,
-                  None);
+        check_key(&cluster, k.as_bytes(), v.as_bytes(), Some(true), None, None);
     }
 
     let region = cluster.get_region(b"k1");
@@ -749,7 +741,6 @@ fn test_old_compact_log() {
         .call_command_on_leader(req, Duration::from_secs(3))
         .unwrap();
 }
-
 
 #[test]
 fn test_compact_log() {
@@ -909,7 +900,7 @@ fn test_split_merge() {
 fn test_get_region_local_state() {
     let (mut cluster, pd_client) = new_mock_cluster(0, 3);
 
-    cluster.start();
+    cluster.start().unwrap();
 
     let k = b"k1";
     let v = b"v1";
