@@ -1,24 +1,22 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::engine::RocksEngine;
-use crate::rocks_metrics_defs::*;
-use crate::sst::RocksSstWriterBuilder;
-use crate::{util, RocksSstWriter};
+use std::os::unix::{ffi::OsStrExt, fs::MetadataExt};
+
 use engine_traits::{
     CFNamesExt, DeleteStrategy, ImportExt, IterOptions, Iterable, Iterator, MiscExt, Mutable,
     Range, Result, SstWriter, SstWriterBuilder, WriteBatch, WriteBatchExt, ALL_CFS,
 };
 use rocksdb::Range as RocksRange;
-use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::MetadataExt;
-use tikv_util::box_try;
-use tikv_util::keybuilder::KeyBuilder;
+use tikv_util::{box_try, keybuilder::KeyBuilder};
+
+use crate::{
+    engine::RocksEngine, rocks_metrics_defs::*, sst::RocksSstWriterBuilder, util, RocksSstWriter,
+};
 
 pub const MAX_DELETE_COUNT_BY_KEY: usize = 2048;
 
 fn get_fs_sid(path: &str) -> Result<u64> {
-    use std::ffi::CString;
-    use std::mem;
+    use std::{ffi::CString, mem};
     let cstr = match CString::new(std::ffi::OsStr::new(path).as_bytes()) {
         Ok(cstr) => cstr,
         Err(..) => {
@@ -394,17 +392,19 @@ impl RocksEngine {
 
 #[cfg(test)]
 mod tests {
-    use tempfile::Builder;
-
-    use crate::engine::RocksEngine;
-    use crate::raw::DB;
-    use crate::raw::{ColumnFamilyOptions, DBOptions};
-    use crate::raw_util::{new_engine_opt, CFOptions};
     use std::sync::Arc;
 
+    use engine_traits::{
+        DeleteStrategy, Iterable, Iterator, Mutable, SeekKey, SyncMutable, WriteBatchExt, ALL_CFS,
+    };
+    use tempfile::Builder;
+
     use super::*;
-    use engine_traits::{DeleteStrategy, ALL_CFS};
-    use engine_traits::{Iterable, Iterator, Mutable, SeekKey, SyncMutable, WriteBatchExt};
+    use crate::{
+        engine::RocksEngine,
+        raw::{ColumnFamilyOptions, DBOptions, DB},
+        raw_util::{new_engine_opt, CFOptions},
+    };
 
     fn check_data(db: &RocksEngine, cfs: &[&str], expected: &[(&[u8], &[u8])]) {
         for cf in cfs {

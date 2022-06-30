@@ -1,5 +1,12 @@
 #![feature(slice_take)]
 #![allow(unused_imports)]
+use std::{
+    collections::{BTreeMap, HashMap},
+    pin::Pin,
+    sync::{Arc, Mutex, RwLock},
+    time::Duration,
+};
+
 #[warn(unreachable_patterns)]
 use collections::HashSet;
 use encryption::DataKeyManager;
@@ -7,20 +14,15 @@ pub use engine_store_ffi::interfaces::root::DB as ffi_interfaces;
 use engine_store_ffi::{
     EngineStoreServerHelper, RaftStoreProxyFFIHelper, RawCppPtr, UnwrapExternCFunc,
 };
-use engine_traits::{Engines, Iterable, SyncMutable};
-use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{Engines, Iterable, SyncMutable, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::raft_cmdpb::AdminCmdType;
 use protobuf::Message;
 use raftstore::store::RaftRouter;
-use std::collections::BTreeMap;
-use std::collections::HashMap;
-use std::pin::Pin;
-use std::sync::Mutex;
-use std::sync::{Arc, RwLock};
-use std::time::Duration;
 use test_raftstore::{Simulator, TestPdClient};
-use tikv::config::TiKvConfig;
-use tikv::server::{Node, Result as ServerResult};
+use tikv::{
+    config::TiKvConfig,
+    server::{Node, Result as ServerResult},
+};
 use tikv_util::{debug, info, warn};
 
 pub mod mock_cluster;

@@ -1,47 +1,53 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::path::Path;
-use std::sync::{Arc, Mutex, RwLock};
+use std::{
+    path::Path,
+    sync::{Arc, Mutex, RwLock},
+};
 
-use tempfile::TempDir;
-
-use kvproto::metapb;
-use kvproto::raft_cmdpb::*;
-use kvproto::raft_serverpb::{self, RaftMessage};
-use raft::eraftpb::MessageType;
-use raft::SnapshotStatus;
-
-use crate::mock_cluster::{create_tiflash_test_engine, Cluster};
-use crate::transport_simulate::{Filter, SimulateTransport};
-use crate::{Simulator, TestPdClient};
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
 use engine_rocks::RocksSnapshot;
-use engine_traits::KvEngine;
-use engine_traits::{Engines, MiscExt, Peekable};
-use raftstore::coprocessor::config::SplitCheckConfigManager;
-use raftstore::coprocessor::CoprocessorHost;
-use raftstore::errors::Error as RaftError;
-use raftstore::router::{LocalReadRouter, RaftStoreRouter, ServerRaftStoreRouter};
-use raftstore::store::config::RaftstoreConfigManager;
-use raftstore::store::fsm::store::StoreMeta;
-use raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
-use raftstore::store::SnapManagerBuilder;
-use raftstore::store::*;
-use raftstore::Result;
+use engine_traits::{Engines, KvEngine, MiscExt, Peekable};
+use kvproto::{
+    metapb,
+    raft_cmdpb::*,
+    raft_serverpb::{self, RaftMessage},
+};
+use raft::{eraftpb::MessageType, SnapshotStatus};
+use raftstore::{
+    coprocessor::{config::SplitCheckConfigManager, CoprocessorHost},
+    errors::Error as RaftError,
+    router::{LocalReadRouter, RaftStoreRouter, ServerRaftStoreRouter},
+    store::{
+        config::RaftstoreConfigManager,
+        fsm::{store::StoreMeta, RaftBatchSystem, RaftRouter},
+        SnapManagerBuilder, *,
+    },
+    Result,
+};
 use resource_metering::CollectorRegHandle;
+use tempfile::TempDir;
 use test_raftstore::Config;
-use tikv::config::{ConfigController, Module};
-use tikv::import::SSTImporter;
-use tikv::server::raftkv::ReplicaReadLockChecker;
-use tikv::server::Node;
-use tikv::server::Result as ServerResult;
-use tikv_util::box_err;
-use tikv_util::config::VersionTrack;
-use tikv_util::time::ThreadReadId;
-use tikv_util::worker::{Builder as WorkerBuilder, LazyWorker};
-use tikv_util::{debug, defer};
+use tikv::{
+    config::{ConfigController, Module},
+    import::SSTImporter,
+    server::{raftkv::ReplicaReadLockChecker, Node, Result as ServerResult},
+};
+use tikv_util::{
+    box_err,
+    config::VersionTrack,
+    debug, defer,
+    time::ThreadReadId,
+    worker::{Builder as WorkerBuilder, LazyWorker},
+};
+
+use crate::{
+    mock_cluster::{create_tiflash_test_engine, Cluster},
+    transport_simulate::{Filter, SimulateTransport},
+    Simulator, TestPdClient,
+};
 
 pub struct ChannelTransportCore {
     snap_paths: HashMap<u64, (SnapManager, TempDir)>,
@@ -326,11 +332,13 @@ impl Simulator<engine_tiflash::RocksEngine> for NodeCluster {
             cm,
             CollectorRegHandle::new_for_test(),
         )?;
-        assert!(engines
-            .kv
-            .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
-            .unwrap()
-            .is_none());
+        assert!(
+            engines
+                .kv
+                .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
+                .unwrap()
+                .is_none()
+        );
 
         assert!(node_id == 0 || node_id == node.id());
 

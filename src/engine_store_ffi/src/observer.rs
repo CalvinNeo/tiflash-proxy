@@ -1,32 +1,44 @@
-use crate::interfaces::root::DB as ffi_interfaces;
-use crate::interfaces::root::DB::EngineStoreApplyRes;
-use crate::{ColumnFamilyType, RaftCmdHeader, WriteCmdType};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    ops::{Deref, DerefMut},
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        mpsc, Arc, Mutex, RwLock,
+    },
+};
+
 use engine_tiflash::FsStatsExt;
 use engine_traits::{Peekable, SyncMutable};
-use kvproto::metapb::Region;
-use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
-    RaftCmdRequest, RaftCmdResponse, Request,
+use kvproto::{
+    metapb::Region,
+    raft_cmdpb::{
+        AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
+        RaftCmdRequest, RaftCmdResponse, Request,
+    },
+    raft_serverpb::RaftApplyState,
 };
-use kvproto::raft_serverpb::RaftApplyState;
 use raft::{eraftpb, StateRole};
-use raftstore::coprocessor::{
-    AdminObserver, BoxAdminObserver, BoxQueryObserver, BoxRegionChangeObserver, Coprocessor,
-    CoprocessorHost, ObserverContext, QueryObserver, RegionChangeEvent, RegionChangeObserver,
-    RegionState,
+use raftstore::{
+    coprocessor::{
+        AdminObserver, ApplySnapshotObserver, BoxAdminObserver, BoxApplySnapshotObserver,
+        BoxQueryObserver, BoxRegionChangeObserver, Cmd, Coprocessor, CoprocessorHost,
+        ObserverContext, QueryObserver, RegionChangeEvent, RegionChangeObserver, RegionState,
+    },
+    store::SnapKey,
 };
-use raftstore::coprocessor::{ApplySnapshotObserver, BoxApplySnapshotObserver, Cmd};
-use raftstore::store::SnapKey;
 use sst_importer::SSTImporter;
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::ops::{Deref, DerefMut};
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, Mutex, RwLock};
 use tikv_util::{debug, error, info, warn};
-use yatp::pool::{Builder, ThreadPool};
-use yatp::task::future::TaskCell;
+use yatp::{
+    pool::{Builder, ThreadPool},
+    task::future::TaskCell,
+};
+
+use crate::{
+    interfaces::root::{DB as ffi_interfaces, DB::EngineStoreApplyRes},
+    ColumnFamilyType, RaftCmdHeader, WriteCmdType,
+};
 
 pub struct PtrWrapper(crate::RawCppPtr);
 

@@ -5,17 +5,14 @@
 //! These are an artifact of refactoring the engine traits and will go away
 //! eventually. Prefer to use the versions in the `util` module.
 
-use std::fs;
-use std::path::Path;
-use std::sync::Arc;
-
-use engine_traits::Result;
-use engine_traits::CF_DEFAULT;
-use rocksdb::load_latest_options;
-use rocksdb::{CColumnFamilyDescriptor, ColumnFamilyOptions, DBOptions, Env, DB};
-use tikv_util::warn;
+use std::{fs, path::Path, sync::Arc};
 
 pub use engine_rocks::raw_util::CFOptions;
+use engine_traits::{Result, CF_DEFAULT};
+use rocksdb::{
+    load_latest_options, CColumnFamilyDescriptor, ColumnFamilyOptions, DBOptions, Env, DB,
+};
+use tikv_util::warn;
 
 pub fn new_engine(
     path: &str,
@@ -136,10 +133,11 @@ pub fn from_raw_perf_level(level: rocksdb::PerfLevel) -> engine_traits::PerfLeve
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use engine_traits::CF_DEFAULT;
     use rocksdb::{ColumnFamilyOptions, DBOptions, DB};
     use tempfile::Builder;
+
+    use super::*;
 
     #[test]
     fn test_cfs_diff() {

@@ -29,8 +29,12 @@ use api_version::{dispatch_api_version, APIVersion};
 use cdc::{CdcConfigManager, MemoryQuota};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
-use engine_rocks::raw::{Cache, Env};
-use engine_rocks::{from_rocks_compression_type, FlowInfo};
+use engine_rocks::{
+    from_rocks_compression_type,
+    raw::{Cache, Env},
+    FlowInfo,
+};
+use engine_store_ffi::{config::ProxyConfig, gen_engine_store_server_helper};
 use engine_tiflash::RocksEngine;
 use engine_traits::{
     CFOptionsExt, ColumnFamilyOptions, Engines, FlowControlFactorsExt, KvEngine, MiscExt,
@@ -66,19 +70,19 @@ use raftstore::{
     },
 };
 use security::SecurityManager;
+use server::{fatal, memory::*, raft_engine_switch::*, setup::*, signal_handler};
 use tikv::{
     config::{ConfigController, DBType, TiKvConfig},
     coprocessor::{self, MEMTRACE_ROOT as MEMTRACE_COPROCESSOR},
     coprocessor_v2,
     import::{ImportSSTService, SSTImporter},
     read_pool::{build_yatp_read_pool, ReadPool, ReadPoolConfigManager},
-    server::raftkv::ReplicaReadLockChecker,
     server::{
-        config::Config as ServerConfig,
-        config::ServerConfigManager,
+        config::{Config as ServerConfig, ServerConfigManager},
         create_raft_storage,
         gc_worker::{AutoGcConfig, GcWorker},
         lock_manager::LockManager,
+        raftkv::ReplicaReadLockChecker,
         resolve,
         service::{DebugService, DiagnosticsService},
         status_server::StatusServer,
@@ -94,22 +98,17 @@ use tikv::{
 use tikv_util::{
     check_environment_variables,
     config::{ensure_dir_exist, RaftDataStateMachine, VersionTrack},
+    crit, error, error_unknown, info,
     math::MovingAvgU32,
     quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
     sys::{disk, register_memory_usage_high_water, SysQuota},
+    thd_name,
     thread_group::GroupProperties,
     time::{Instant, Monitor},
+    warn,
     worker::{Builder as WorkerBuilder, LazyWorker, Worker},
 };
 use tokio::runtime::Builder;
-
-use server::fatal;
-use server::raft_engine_switch::*;
-use server::{memory::*, setup::*, signal_handler};
-use tikv_util::{crit, error, error_unknown, info, thd_name, warn};
-
-use engine_store_ffi::config::ProxyConfig;
-use engine_store_ffi::gen_engine_store_server_helper;
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 

@@ -1,45 +1,55 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_store_ffi::{KVGetStatus, RaftStoreProxyFFI};
-use mock_engine_store::node::NodeCluster;
-use mock_engine_store::server::ServerCluster;
-use std::collections::HashMap;
-use std::sync::{mpsc, Arc, RwLock};
-use test_raftstore::{must_get_equal, must_get_none, new_node_cluster, new_peer, TestPdClient};
+use std::{
+    collections::HashMap,
+    io::{self, Read, Write},
+    ops::{Deref, DerefMut},
+    path::Path,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        mpsc, Arc, Once, RwLock,
+    },
+};
 
 use engine_rocks::raw::DB;
-use engine_store_ffi::config::{ensure_no_common_unrecognized_keys, ProxyConfig};
+use engine_store_ffi::{
+    config::{ensure_no_common_unrecognized_keys, ProxyConfig},
+    KVGetStatus, RaftStoreProxyFFI,
+};
 use engine_tiflash::*;
-use engine_traits::Iterator;
-use engine_traits::MiscExt;
-use engine_traits::Peekable;
-use engine_traits::SeekKey;
-use engine_traits::{Error, Result};
-use engine_traits::{ExternalSstFileInfo, SstExt, SstReader, SstWriter, SstWriterBuilder};
-use engine_traits::{Iterable, Mutable, WriteBatch, WriteBatchExt};
-use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
-use kvproto::raft_serverpb::{RaftApplyState, RegionLocalState, StoreIdent};
-use mock_engine_store::mock_cluster::FFIHelperSet;
-use mock_engine_store::transport_simulate::Direction;
-use mock_engine_store::transport_simulate::{
-    CloneFilterFactory, CollectSnapshotFilter, RegionPacketFilter,
+use engine_traits::{
+    Error, ExternalSstFileInfo, Iterable, Iterator, MiscExt, Mutable, Peekable, Result, SeekKey,
+    SstExt, SstReader, SstWriter, SstWriterBuilder, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK,
+    CF_RAFT, CF_WRITE,
+};
+use kvproto::{
+    raft_cmdpb::{AdminCmdType, AdminRequest},
+    raft_serverpb::{RaftApplyState, RegionLocalState, StoreIdent},
+};
+use mock_engine_store::{
+    mock_cluster::FFIHelperSet,
+    node::NodeCluster,
+    server::ServerCluster,
+    transport_simulate::{
+        CloneFilterFactory, CollectSnapshotFilter, Direction, RegionPacketFilter,
+    },
 };
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
-use raftstore::coprocessor::{ConsistencyCheckMethod, Coprocessor};
-use raftstore::store::util::find_peer;
+use raftstore::{
+    coprocessor::{ConsistencyCheckMethod, Coprocessor},
+    store::util::find_peer,
+};
 use sst_importer::SSTImporter;
-use std::io::{self, Read, Write};
-use std::ops::{Deref, DerefMut};
-use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Once;
-use test_raftstore::Simulator;
+use test_raftstore::{
+    must_get_equal, must_get_none, new_node_cluster, new_peer, Simulator, TestPdClient,
+};
 use tikv::config::TiKvConfig;
-use tikv_util::config::{LogFormat, ReadableDuration, ReadableSize};
-use tikv_util::time::Duration;
-use tikv_util::HandyRwLock;
+use tikv_util::{
+    config::{LogFormat, ReadableDuration, ReadableSize},
+    time::Duration,
+    HandyRwLock,
+};
 
 // TODO Need refactor if moved to raft-engine
 fn get_region_local_state(engine: &engine_rocks::RocksEngine, region_id: u64) -> RegionLocalState {
@@ -125,7 +135,7 @@ fn collect_all_states(
                     in_memory_applied_term: region.applied_term,
                     in_disk_apply_state: get_apply_state(&engine, region_id),
                     in_disk_region_state: get_region_local_state(&engine, region_id),
-                    ident: ident,
+                    ident,
                 },
             );
         },
@@ -353,11 +363,13 @@ fn test_store_setup() {
     let store_id = cluster.raw.engines.keys().last().unwrap();
     let store = pd_client.get_store(*store_id).unwrap();
     println!("store {:?}", store);
-    assert!(store
-        .get_labels()
-        .iter()
-        .find(|&x| x.key == "engine" && x.value == "tiflash")
-        .is_some());
+    assert!(
+        store
+            .get_labels()
+            .iter()
+            .find(|&x| x.key == "engine" && x.value == "tiflash")
+            .is_some()
+    );
 
     cluster.shutdown();
 }

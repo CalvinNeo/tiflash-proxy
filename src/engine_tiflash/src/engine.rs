@@ -1,34 +1,40 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::any::Any;
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::fs;
-use std::path::Path;
-use std::sync::{mpsc, Arc, Mutex};
+use std::{
+    any::Any,
+    cell::RefCell,
+    collections::{hash_map::RandomState, HashMap},
+    fmt::Formatter,
+    fs,
+    path::Path,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        mpsc, Arc, Mutex,
+    },
+};
 
+use engine_rocks::{
+    db_vector::RocksDBVector,
+    options::RocksReadOptions,
+    rocks_metrics::{
+        flush_engine_histogram_metrics, flush_engine_iostall_properties, flush_engine_properties,
+        flush_engine_ticker_metrics,
+    },
+    rocks_metrics_defs::{
+        ENGINE_HIST_TYPES, ENGINE_TICKER_TYPES, TITAN_ENGINE_HIST_TYPES, TITAN_ENGINE_TICKER_TYPES,
+    },
+    util::get_cf_handle,
+    RocksEngineIterator, RocksSnapshot,
+};
 use engine_traits::{
     Error, IterOptions, Iterable, KvEngine, Peekable, ReadOptions, Result, SyncMutable,
 };
-use rocksdb::{DBIterator, Writable, DB};
-
-use engine_rocks::db_vector::RocksDBVector;
-use engine_rocks::options::RocksReadOptions;
-use engine_rocks::rocks_metrics::{
-    flush_engine_histogram_metrics, flush_engine_iostall_properties, flush_engine_properties,
-    flush_engine_ticker_metrics,
-};
-use engine_rocks::rocks_metrics_defs::{
-    ENGINE_HIST_TYPES, ENGINE_TICKER_TYPES, TITAN_ENGINE_HIST_TYPES, TITAN_ENGINE_TICKER_TYPES,
-};
-use engine_rocks::util::get_cf_handle;
-use engine_rocks::{RocksEngineIterator, RocksSnapshot};
 use raftstore::store::SnapKey;
-use std::collections::hash_map::RandomState;
-use std::fmt::Formatter;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use yatp::pool::{Builder, ThreadPool};
-use yatp::task::future::TaskCell;
+use rocksdb::{DBIterator, Writable, DB};
+use yatp::{
+    pool::{Builder, ThreadPool},
+    task::future::TaskCell,
+};
 
 pub struct FsStatsExt {
     pub used: u64,
@@ -251,13 +257,13 @@ impl SyncMutable for RocksEngine {
 
 #[cfg(test)]
 mod tests {
-    use crate::raw_util;
+    use std::sync::Arc;
+
     use engine_traits::{Iterable, KvEngine, Peekable, SyncMutable};
     use kvproto::metapb::Region;
-    use std::sync::Arc;
     use tempfile::Builder;
 
-    use crate::{RocksEngine, RocksSnapshot};
+    use crate::{raw_util, RocksEngine, RocksSnapshot};
 
     #[test]
     fn test_base() {

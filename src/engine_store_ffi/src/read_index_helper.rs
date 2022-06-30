@@ -1,15 +1,20 @@
+use std::{
+    future::Future,
+    time::{Duration, Instant},
+};
+
 use engine_traits::{KvEngine, RaftEngine};
 use futures::executor::block_on;
-use futures_util::compat::Future01CompatExt;
-use futures_util::future::BoxFuture;
-use kvproto::kvrpcpb::{ReadIndexRequest, ReadIndexResponse};
-use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest};
-use raftstore::router::RaftStoreRouter;
-use raftstore::store::{Callback, RaftCmdExtraOpts, RaftRouter, ReadResponse};
-use std::future::Future;
-use std::time::{Duration, Instant};
-use tikv_util::future::paired_future_callback;
-use tikv_util::{debug, error};
+use futures_util::{compat::Future01CompatExt, future::BoxFuture};
+use kvproto::{
+    kvrpcpb::{ReadIndexRequest, ReadIndexResponse},
+    raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest},
+};
+use raftstore::{
+    router::RaftStoreRouter,
+    store::{Callback, RaftCmdExtraOpts, RaftRouter, ReadResponse},
+};
+use tikv_util::{debug, error, future::paired_future_callback};
 
 use super::utils::ArcNotifyWaker;
 

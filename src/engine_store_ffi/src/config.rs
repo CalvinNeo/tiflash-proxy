@@ -1,12 +1,13 @@
-use std::path::{Path, PathBuf};
+use std::{
+    collections::{hash_map::RandomState, HashSet},
+    iter::FromIterator,
+    path::{Path, PathBuf},
+};
 
 use itertools::Itertools;
 use online_config::OnlineConfig;
 use serde_derive::{Deserialize, Serialize};
 use server::fatal;
-use std::collections::hash_map::RandomState;
-use std::collections::HashSet;
-use std::iter::FromIterator;
 use tikv::config::TiKvConfig;
 use tikv_util::crit;
 

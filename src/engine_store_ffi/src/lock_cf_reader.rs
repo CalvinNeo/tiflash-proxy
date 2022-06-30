@@ -1,10 +1,13 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    io::{BufReader, Read},
+    sync::Arc,
+};
+
 use encryption::DataKeyManager;
 use file_system::File;
 use raftstore::store::snap::snap_io::get_decrypter_reader;
-use std::io::{BufReader, Read};
-use std::sync::Arc;
 use tikv_util::codec::bytes::CompactBytesFromFileDecoder;
 
 type LockCFDecoder = BufReader<Box<dyn Read + Send>>;

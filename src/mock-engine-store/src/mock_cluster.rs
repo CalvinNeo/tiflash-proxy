@@ -1,45 +1,48 @@
 #![feature(slice_take)]
 
-use crate::TiKvConfig;
-use crate::{gen_engine_store_server_helper, EngineStoreServer, EngineStoreServerWrap};
-use encryption::DataKeyManager;
-use engine_store_ffi::interfaces::root::DB as ffi_interfaces;
-use engine_store_ffi::{
-    EngineStoreServerHelper, RaftStoreProxyFFIHelper, RawCppPtr, UnwrapExternCFunc,
+use std::{
+    borrow::BorrowMut,
+    cell::RefCell,
+    collections::{BTreeMap, HashMap, HashSet},
+    path::Path,
+    pin::Pin,
+    sync::{atomic::AtomicU8, Arc, Mutex, RwLock},
+    time::Duration,
 };
-use engine_traits::{Engines, SyncMutable};
-use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use protobuf::Message;
-use raftstore::store::fsm::create_raft_batch_system;
-use raftstore::store::fsm::store::{StoreMeta, PENDING_MSG_CAP};
-use raftstore::store::RaftRouter;
-use server::fatal;
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::Path;
-use std::pin::Pin;
-use std::sync::atomic::AtomicU8;
-use std::sync::Mutex;
-use std::sync::{Arc, RwLock};
-use std::time::Duration;
-use test_raftstore::Config;
-use test_raftstore::{Simulator, TestPdClient};
-use tikv::server::{Node, Result as ServerResult};
-use tikv_util::crit;
-use tikv_util::sys::SysQuota;
-use tikv_util::thread_group::GroupProperties;
-use tikv_util::HandyRwLock;
-use tikv_util::{debug, info, warn};
 
+use encryption::DataKeyManager;
 use engine_rocks::raw::DB;
-use engine_store_ffi::config::ProxyConfig;
+use engine_store_ffi::{
+    config::ProxyConfig, interfaces::root::DB as ffi_interfaces, EngineStoreServerHelper,
+    RaftStoreProxyFFIHelper, RawCppPtr, UnwrapExternCFunc,
+};
 use engine_tiflash::RocksEngine;
+use engine_traits::{Engines, SyncMutable, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use file_system::IORateLimiter;
-use kvproto::metapb;
-use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
-use raftstore::{Error, Result};
-use std::borrow::BorrowMut;
-use std::cell::RefCell;
+use kvproto::{
+    metapb,
+    raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
+};
+use protobuf::Message;
+use raftstore::{
+    store::{
+        fsm::{
+            create_raft_batch_system,
+            store::{StoreMeta, PENDING_MSG_CAP},
+        },
+        RaftRouter,
+    },
+    Error, Result,
+};
+use server::fatal;
 use tempfile::TempDir;
+use test_raftstore::{Config, Simulator, TestPdClient};
+use tikv::server::{Node, Result as ServerResult};
+use tikv_util::{
+    crit, debug, info, sys::SysQuota, thread_group::GroupProperties, warn, HandyRwLock,
+};
+
+use crate::{gen_engine_store_server_helper, EngineStoreServer, EngineStoreServerWrap, TiKvConfig};
 // mock cluster
 
 pub struct FFIHelperSet {

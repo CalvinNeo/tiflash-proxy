@@ -1,14 +1,17 @@
-use engine_store_ffi::interfaces::root::DB::RawRustPtr;
+use std::{
+    collections::hash_map::{Entry, RandomState},
+    pin::Pin,
+    sync::{Arc, Mutex, RwLock},
+    time::Duration,
+};
+
 use engine_store_ffi::{
     ffi_gc_rust_ptr, ffi_make_async_waker, ffi_make_read_index_task, ffi_make_timer_task,
-    ffi_poll_read_index_task, ffi_poll_timer_task, ProtoMsgBaseBuff, RawVoidPtr,
+    ffi_poll_read_index_task, ffi_poll_timer_task, interfaces::root::DB::RawRustPtr,
+    ProtoMsgBaseBuff, RawVoidPtr,
 };
 use lazy_static::lazy_static;
 use mock_engine_store::node::NodeCluster;
-use std::collections::hash_map::{Entry, RandomState};
-use std::pin::Pin;
-use std::sync::{Arc, Mutex, RwLock};
-use std::time::Duration;
 use test_raftstore::new_peer;
 use tikv_util::{debug, error, info, warn};
 

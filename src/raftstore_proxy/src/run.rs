@@ -1,28 +1,29 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::rawserver;
+use std::{
+    path::Path,
+    sync::{atomic::AtomicU8, Arc, Mutex},
+    time::Duration,
+};
+
 use api_version::{dispatch_api_version, APIVersion};
+use engine_store_ffi::{config::ProxyConfig, *};
 use engine_traits::{ColumnFamilyOptions, Engines, RaftEngine};
 use file_system::get_io_rate_limiter;
 use raft_log_engine::RaftLogEngine;
-use raftstore::store::fsm::store::PENDING_MSG_CAP;
-use raftstore::store::fsm::StoreMeta;
-use rawserver::ConfiguredRaftEngine;
-use rawserver::EnginesResourceInfo;
-use std::path::Path;
-use std::sync::{Arc, Mutex};
+use raftstore::store::fsm::{store::PENDING_MSG_CAP, StoreMeta};
+use rawserver::{ConfiguredRaftEngine, EnginesResourceInfo};
+use server::fatal;
 use tikv::{config::TiKvConfig, server::CPU_CORES_QUOTA_GAUGE};
 use tikv_util::{
+    crit, error, error_unknown, info,
     sys::{register_memory_usage_high_water, SysQuota},
+    thd_name,
     time::{Instant, Monitor},
+    warn,
 };
 
-use engine_store_ffi::config::ProxyConfig;
-use engine_store_ffi::*;
-use server::fatal;
-use std::sync::atomic::AtomicU8;
-use std::time::Duration;
-use tikv_util::{crit, error, error_unknown, info, thd_name, warn};
+use crate::rawserver;
 
 pub fn init_tiflash_engines<CER: ConfiguredRaftEngine>(
     tikv: &mut rawserver::TiKVServer<CER>,

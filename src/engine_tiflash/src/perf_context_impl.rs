@@ -1,13 +1,14 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::perf_context_metrics::{
-    APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC, STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC,
-};
-use crate::{
-    raw_util, set_perf_flags, set_perf_level, PerfContext as RawPerfContext, PerfFlag, PerfFlags,
-};
 use engine_traits::{PerfContextKind, PerfLevel};
 use lazy_static::lazy_static;
+
+use crate::{
+    perf_context_metrics::{
+        APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC, STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC,
+    },
+    raw_util, set_perf_flags, set_perf_level, PerfContext as RawPerfContext, PerfFlag, PerfFlags,
+};
 
 #[macro_export]
 macro_rules! report_perf_context {

@@ -1,14 +1,16 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::path::Path;
-use std::process;
+use std::{
+    ffi::CStr,
+    os::raw::{c_char, c_int},
+    path::Path,
+    process,
+};
 
 use clap::{App, Arg};
 use engine_store_ffi::config::ProxyConfig;
 use server::setup::{ensure_no_unrecognized_config, validate_and_persist_config};
 use slog_global::*;
-use std::ffi::CStr;
-use std::os::raw::{c_char, c_int};
 use tikv::config::TiKvConfig;
 
 pub fn proxy_version_info() -> String {

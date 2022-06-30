@@ -1,21 +1,24 @@
 use std::sync::{Arc, RwLock};
+
 use test_raftstore::{must_get_equal, must_get_none, TestPdClient};
 
 extern crate rocksdb;
-use engine_traits::SstExt;
-use engine_traits::{Error, Result};
-use engine_traits::{Iterable, MiscExt};
-use kvproto::raft_serverpb::{RaftApplyState, RegionLocalState, StoreIdent};
+use std::{
+    fs::File,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
-use std::{fs::File, time::Duration};
-
-use kvproto::import_sstpb::SstMeta;
-use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminRequest, CmdType, RaftCmdRequest, RaftCmdResponse, Request, StatusCmdType,
-    StatusRequest,
+use engine_traits::{Error, Iterable, MiscExt, Result, SstExt};
+use kvproto::{
+    import_sstpb::SstMeta,
+    raft_cmdpb::{
+        AdminCmdType, AdminRequest, CmdType, RaftCmdRequest, RaftCmdResponse, Request,
+        StatusCmdType, StatusRequest,
+    },
+    raft_serverpb::{RaftApplyState, RegionLocalState, StoreIdent},
 };
 use sst_importer::SSTImporter;
-use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use test_raftstore::Config;
 use test_sst_importer::gen_sst_file_with_kvs;
