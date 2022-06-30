@@ -601,10 +601,6 @@ fn test_kv_write_always_persist() {
         for id in cluster.raw.engines.keys() {
             let p = &prev_states.get(id).unwrap().in_disk_apply_state;
             let n = &new_states.get(id).unwrap().in_disk_apply_state;
-            if p == n {
-                tikv_util::debug!("!!!!! p == n"; "pn" => ?p, "peer_id" => id,
-                    "nmem" => ?new_states.get(id).unwrap().in_memory_apply_state);
-            }
             assert_ne!(p, n);
         }
         prev_states = new_states;
