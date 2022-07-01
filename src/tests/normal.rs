@@ -402,7 +402,7 @@ fn test_store_stats() {
     cluster.shutdown();
 }
 
-#[test]
+// #[test]
 fn test_write_batch() {
     let mut cluster = new_node_cluster(0, 1);
 
@@ -817,6 +817,8 @@ fn test_old_compact_log() {
     let res = cluster
         .call_command_on_leader(req, Duration::from_secs(3))
         .unwrap();
+
+    cluster.shutdown();
 }
 
 #[test]
