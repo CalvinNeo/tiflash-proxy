@@ -50,6 +50,7 @@ use tikv_util::{
     time::Duration,
     HandyRwLock,
 };
+use futures::executor::block_on;
 
 // TODO Need refactor if moved to raft-engine
 fn get_region_local_state(engine: &engine_rocks::RocksEngine, region_id: u64) -> RegionLocalState {
@@ -330,12 +331,11 @@ fn test_config() {
         engine_store_ffi::config::ProxyConfig::from_file(path, Some(&mut proxy_unrecognized_keys))
             .unwrap();
     assert_eq!(proxy_config.snap_handle_pool_size, 4);
+    let v1 = vec![String::from("a.b"), String::from("b")];
+    let v2 = vec![String::from("a.b"), String::from("b.b"), String::from("c")];
     let unknown = ensure_no_common_unrecognized_keys(
-        &vec!["a.b", "b"].iter().map(|e| String::from(*e)).collect(),
-        &vec!["a.b", "b.b", "c"]
-            .iter()
-            .map(|e| String::from(*e))
-            .collect(),
+        &v1,
+        &v2,
     );
     assert_eq!(unknown.is_err(), true);
     assert_eq!(unknown.unwrap_err(), "a.b, b.b");
@@ -384,10 +384,21 @@ fn test_store_stats() {
         let engine = cluster.get_tiflash_engine(*id);
         assert_eq!(
             engine.ffi_hub.as_ref().unwrap().get_store_stats().capacity,
-            123456
+            444444
         );
     }
 
+    for id in cluster.raw.engines.keys() {
+        cluster.raw.must_send_store_heartbeat(*id);
+    }
+    std::thread::sleep(std::time::Duration::from_millis(1000));
+    // let resp = block_on(pd_client.store_heartbeat(Default::default(), None, None)).unwrap();
+    for id in cluster.raw.engines.keys() {
+        let store_stat = pd_client.get_store_stats(*id).unwrap();
+        assert_eq!(store_stat.get_capacity(), 444444);
+        assert_eq!(store_stat.get_available(), 333333);
+    }
+    // The same to mock-engine-store
     cluster.shutdown();
 }
 

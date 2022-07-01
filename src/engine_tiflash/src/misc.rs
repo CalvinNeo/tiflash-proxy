@@ -364,19 +364,6 @@ impl MiscExt for RocksEngine {
                 .unwrap_or_default()
                 != 0
     }
-
-    fn compute_total_capacity(&self, infos: &[engine_traits::StoreStatInfo]) -> Option<u64> {
-        let mut total: u64 = 0;
-        for info in infos.iter() {
-            if !is_same_fs(info.path, self.path()) {
-                total += info.capacity;
-            }
-        }
-        match self.get_engine_raw_capacity() {
-            Err(e) => None,
-            Ok(capacity) => Some(capacity),
-        }
-    }
 }
 
 impl RocksEngine {

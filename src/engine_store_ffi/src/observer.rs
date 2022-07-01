@@ -25,6 +25,7 @@ use raftstore::{
         AdminObserver, ApplySnapshotObserver, BoxAdminObserver, BoxApplySnapshotObserver,
         BoxQueryObserver, BoxRegionChangeObserver, Cmd, Coprocessor, CoprocessorHost,
         ObserverContext, QueryObserver, RegionChangeEvent, RegionChangeObserver, RegionState,
+        BoxPdTaskObserver, PdTaskObserver
     },
     store::SnapKey,
 };
@@ -39,6 +40,7 @@ use crate::{
     interfaces::root::{DB as ffi_interfaces, DB::EngineStoreApplyRes},
     ColumnFamilyType, RaftCmdHeader, WriteCmdType,
 };
+use raftstore::coprocessor::EngineSize;
 
 pub struct PtrWrapper(crate::RawCppPtr);
 
@@ -140,6 +142,10 @@ impl TiFlashObserver {
         coprocessor_host.registry.register_region_change_observer(
             TIFLASH_OBSERVER_PRIORITY,
             BoxRegionChangeObserver::new(self.clone()),
+        );
+        coprocessor_host.registry.register_pd_task_observer(
+            TIFLASH_OBSERVER_PRIORITY,
+            BoxPdTaskObserver::new(self.clone()),
         );
     }
 
@@ -427,7 +433,7 @@ impl AdminObserver for TiFlashObserver {
             | AdminCmdType::RollbackMerge => {
                 let mut r = AdminResponse::default();
                 match region_state.modified_region.as_ref() {
-                    Some(r) => r.mut_split().set_left(r.clone()),
+                    Some(region) => r.mut_split().set_left(region.clone()),
                     None => {
                         error!("empty modified region";
                             "region_id" => ob_ctx.region().get_id(),
@@ -570,7 +576,7 @@ impl ApplySnapshotObserver for TiFlashObserver {
                         &snap_key,
                     );
                     match sender.send(res) {
-                        Err(e) => error!(?e; "pre_handle_snapshot err when send to receiver";),
+                        Err(e) => error!("pre_handle_snapshot err when send to receiver";),
                         Ok(_) => (),
                     }
                 });
@@ -655,5 +661,16 @@ impl RegionChangeObserver for TiFlashObserver {
             self.engine_store_server_helper
                 .handle_destroy(ob_ctx.region().get_id());
         }
+    }
+}
+
+impl PdTaskObserver for TiFlashObserver {
+    fn on_compute_engine_size(&self, store_size: &mut Option<EngineSize>) {
+        let stats = self.engine_store_server_helper.handle_compute_store_stats();
+        store_size.insert(EngineSize{
+            capacity: stats.fs_stats.capacity_size,
+            used: stats.fs_stats.used_size,
+            avail: stats.fs_stats.avail_size,
+        });
     }
 }
