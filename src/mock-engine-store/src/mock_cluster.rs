@@ -66,6 +66,7 @@ pub struct Cluster<T: Simulator<engine_tiflash::RocksEngine>> {
     pub ffi_helper_lst: Vec<FFIHelperSet>,
     pub ffi_helper_set: Arc<Mutex<HashMap<u64, FFIHelperSet>>>,
     pub proxy_cfg: ProxyConfig,
+    pub proxy_compat: bool,
 }
 
 impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
@@ -93,6 +94,7 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
             ffi_helper_lst: Vec::default(),
             ffi_helper_set: Arc::new(Mutex::new(HashMap::default())),
             proxy_cfg,
+            proxy_compat: false,
         }
     }
 
@@ -103,6 +105,7 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
         router: &Option<RaftRouter<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>>,
         node_cfg: TiKvConfig,
         cluster_id: isize,
+        proxy_compat: bool,
     ) -> (FFIHelperSet, TiKvConfig) {
         // We must allocate on heap to avoid move.
         let proxy = Box::new(engine_store_ffi::RaftStoreProxy {
@@ -120,6 +123,7 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
 
         let mut proxy_helper = Box::new(engine_store_ffi::RaftStoreProxyFFIHelper::new(&proxy));
         let mut engine_store_server = Box::new(EngineStoreServer::new(id, Some(engines)));
+        engine_store_server.proxy_compat = proxy_compat;
         let engine_store_server_wrap = Box::new(EngineStoreServerWrap::new(
             &mut *engine_store_server,
             Some(&mut *proxy_helper),
@@ -162,6 +166,7 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
             router,
             self.raw.cfg.tikv.clone(),
             self as *const Cluster<T> as isize,
+            self.proxy_compat,
         )
     }
 

@@ -69,6 +69,7 @@ pub struct EngineStoreServer {
     pub id: u64,
     pub engines: Option<Engines<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>>,
     pub kvstore: HashMap<RegionId, Box<Region>>,
+    pub proxy_compat: bool,
 }
 
 impl EngineStoreServer {
@@ -80,6 +81,7 @@ impl EngineStoreServer {
             id,
             engines,
             kvstore: Default::default(),
+            proxy_compat: false,
         }
     }
 
