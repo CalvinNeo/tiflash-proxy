@@ -16,7 +16,6 @@ use engine_store_ffi::{
     config::ProxyConfig, interfaces::root::DB as ffi_interfaces, EngineStoreServerHelper,
     RaftStoreProxyFFIHelper, RawCppPtr, UnwrapExternCFunc,
 };
-use engine_tiflash::RocksEngine;
 use engine_traits::{Engines, SyncMutable, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use file_system::IORateLimiter;
 use kvproto::{
@@ -45,6 +44,8 @@ use tikv_util::{
 use crate::{gen_engine_store_server_helper, EngineStoreServer, EngineStoreServerWrap, TiKvConfig};
 // mock cluster
 
+type TiFlashEngine = engine_tiflash::RocksEngine;
+
 pub struct FFIHelperSet {
     pub proxy: Box<engine_store_ffi::RaftStoreProxy>,
     pub proxy_helper: Box<engine_store_ffi::RaftStoreProxyFFIHelper>,
@@ -61,15 +62,15 @@ pub struct EngineHelperSet {
     pub engine_store_server_helper: Box<engine_store_ffi::EngineStoreServerHelper>,
 }
 
-pub struct Cluster<T: Simulator<engine_tiflash::RocksEngine>> {
-    pub raw: test_raftstore::Cluster<T, engine_tiflash::RocksEngine>,
+pub struct Cluster<T: Simulator<TiFlashEngine>> {
+    pub raw: test_raftstore::Cluster<T, TiFlashEngine>,
     pub ffi_helper_lst: Vec<FFIHelperSet>,
     pub ffi_helper_set: Arc<Mutex<HashMap<u64, FFIHelperSet>>>,
     pub proxy_cfg: ProxyConfig,
     pub proxy_compat: bool,
 }
 
-impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
+impl<T: Simulator<TiFlashEngine>> Cluster<T> {
     pub fn new(
         id: u64,
         count: usize,
@@ -99,9 +100,9 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
 
     pub fn make_ffi_helper_set_no_bind(
         id: u64,
-        engines: Engines<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>,
+        engines: Engines<TiFlashEngine, engine_rocks::RocksEngine>,
         key_mgr: &Option<Arc<DataKeyManager>>,
-        router: &Option<RaftRouter<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>>,
+        router: &Option<RaftRouter<TiFlashEngine, engine_rocks::RocksEngine>>,
         node_cfg: TiKvConfig,
         cluster_id: isize,
         proxy_compat: bool,
@@ -154,9 +155,9 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
     pub fn make_ffi_helper_set(
         &mut self,
         id: u64,
-        engines: Engines<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>,
+        engines: Engines<TiFlashEngine, engine_rocks::RocksEngine>,
         key_mgr: &Option<Arc<DataKeyManager>>,
-        router: &Option<RaftRouter<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>>,
+        router: &Option<RaftRouter<TiFlashEngine, engine_rocks::RocksEngine>>,
     ) -> (FFIHelperSet, TiKvConfig) {
         Cluster::<T>::make_ffi_helper_set_no_bind(
             id,
@@ -198,9 +199,9 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
 
     pub fn create_ffi_helper_set(
         &mut self,
-        engines: Engines<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>,
+        engines: Engines<TiFlashEngine, engine_rocks::RocksEngine>,
         key_manager: &Option<Arc<DataKeyManager>>,
-        router: &Option<RaftRouter<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>>,
+        router: &Option<RaftRouter<TiFlashEngine, engine_rocks::RocksEngine>>,
     ) {
         debug!("!!!!!! create_ffi_helper_set");
         let (mut ffi_helper_set, mut node_cfg) =
@@ -250,7 +251,7 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
 
     pub fn create_engine(
         &mut self,
-        router: Option<RaftRouter<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>>,
+        router: Option<RaftRouter<TiFlashEngine, engine_rocks::RocksEngine>>,
     ) {
         let (mut engines, key_manager, dir) = create_tiflash_test_engine(
             router.clone(),
@@ -340,7 +341,7 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
         self.raw.get_region(key)
     }
 
-    pub fn get_tiflash_engine(&self, node_id: u64) -> &engine_tiflash::RocksEngine {
+    pub fn get_tiflash_engine(&self, node_id: u64) -> &TiFlashEngine {
         &self.raw.engines[&node_id].kv
     }
 
@@ -409,11 +410,11 @@ pub fn init_global_ffi_helper_set() {
 pub fn create_tiflash_test_engine(
     // ref init_tiflash_engines and create_test_engine
     // TODO: pass it in for all cases.
-    router: Option<RaftRouter<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>>,
+    router: Option<RaftRouter<TiFlashEngine, engine_rocks::RocksEngine>>,
     limiter: Option<Arc<IORateLimiter>>,
     cfg: &Config,
 ) -> (
-    Engines<engine_tiflash::RocksEngine, engine_rocks::RocksEngine>,
+    Engines<TiFlashEngine, engine_rocks::RocksEngine>,
     Option<Arc<DataKeyManager>>,
     TempDir,
 ) {
@@ -453,7 +454,7 @@ pub fn create_tiflash_test_engine(
         engine_rocks::raw_util::new_engine_opt(raft_path_str, raft_db_opt, raft_cfs_opt).unwrap(),
     );
 
-    let mut engine = engine_tiflash::RocksEngine::from_db(engine);
+    let mut engine = TiFlashEngine::from_db(engine);
     // FFI is not usable, until create_engine.
     let mut raft_engine = engine_rocks::RocksEngine::from_db(raft_engine);
     let shared_block_cache = cache.is_some();
