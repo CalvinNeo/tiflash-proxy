@@ -387,7 +387,9 @@ impl EngineStoreServerWrap {
                         let region = engine_store_server.kvstore.get_mut(&region_id).unwrap();
                         let region_meta = &mut region.region;
                         let new_version = region_meta.get_region_epoch().get_version() + 1;
-
+                        let region_epoch = region_meta.region_epoch.as_mut().unwrap();
+                        region_epoch.set_version(new_version);
+                        
                         region.set_applied(header.index, header.term);
                     }
                     AdminCmdType::CompactLog => {
