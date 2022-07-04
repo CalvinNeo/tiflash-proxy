@@ -331,8 +331,8 @@ fn test_config() {
         engine_store_ffi::config::ProxyConfig::from_file(path, Some(&mut proxy_unrecognized_keys))
             .unwrap();
     assert_eq!(proxy_config.snap_handle_pool_size, 4);
-    let v1 = vec![String::from("a.b"), String::from("b")];
-    let v2 = vec![String::from("a.b"), String::from("b.b"), String::from("c")];
+    let v1 = vec!["a.b", "b"].iter().map(|e| String::from(*e)).collect::<Vec<String>>();
+    let v2 = vec!["a.b", "b.b", "c"].iter().map(|e| String::from(*e)).collect::<Vec<String>>();
     let unknown = ensure_no_common_unrecognized_keys(
         &v1,
         &v2,
