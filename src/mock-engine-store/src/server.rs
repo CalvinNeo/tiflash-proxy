@@ -727,7 +727,6 @@ pub fn new_server_cluster(
         sim,
         pd_client,
         create_tiflash_test_engine,
-        |r: &engine_tiflash::RocksEngine| Arc::clone(r.as_inner()),
     )
 }
 
@@ -743,7 +742,6 @@ pub fn new_incompatible_server_cluster(
         sim,
         pd_client,
         create_tiflash_test_engine,
-        |r: &engine_tiflash::RocksEngine| Arc::clone(r.as_inner()),
     )
 }
 

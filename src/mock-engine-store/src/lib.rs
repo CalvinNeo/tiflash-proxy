@@ -307,6 +307,7 @@ impl EngineStoreServerWrap {
                     AdminCmdType::PrepareMerge => {
                         let tikv_region = resp.get_split().get_left();
 
+                        // Shoule set to MergeState::target
                         let target = req.prepare_merge.as_ref().unwrap().target.as_ref();
                         let region_meta = &mut (engine_store_server
                             .kvstore
@@ -437,16 +438,21 @@ impl EngineStoreServerWrap {
             }
         };
 
-        // We must have this region now.
         let region = match (*self.engine_store_server).kvstore.get_mut(&region_id) {
-            Some(r) => r,
+            Some(r) => Some(r),
             None => {
-                panic!("still can't find region {} for {}", region_id, node_id);
+                warn!(
+                    "still can't find region {} for {}, may be remove due to confchange",
+                    region_id, node_id
+                );
+                None
             }
         };
         match res {
             ffi_interfaces::EngineStoreApplyRes::Persist => {
-                write_to_db_data(&mut (*self.engine_store_server), region);
+                if let Some(region) = region {
+                    write_to_db_data(&mut (*self.engine_store_server), region);
+                }
             }
             _ => (),
         };

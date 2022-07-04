@@ -87,7 +87,6 @@ impl<T: Simulator<engine_tiflash::RocksEngine>> Cluster<T> {
             sim,
             pd_client,
             create_tiflash_test_engine,
-            |r: &engine_tiflash::RocksEngine| Arc::clone(r.rocks.as_inner()),
         );
         Cluster {
             raw: cls,
